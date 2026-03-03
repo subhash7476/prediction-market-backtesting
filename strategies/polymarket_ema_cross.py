@@ -7,24 +7,24 @@ NautilusTrader EMA-cross backtest using TICK-aggregated bars (no catalog needed)
 import os
 from decimal import Decimal
 
-import pandas as pd
-from nautilus_trader.adapters.polymarket import POLYMARKET_VENUE
-from nautilus_trader.adapters.polymarket import PolymarketDataLoader
-from nautilus_trader.analysis.config import TearsheetConfig
-from nautilus_trader.analysis.tearsheet import create_tearsheet
-from nautilus_trader.backtest.config import BacktestEngineConfig
-from nautilus_trader.backtest.engine import BacktestEngine
-from nautilus_trader.config import LoggingConfig
-from nautilus_trader.examples.strategies.ema_cross_long_only import EMACrossLongOnly
-from nautilus_trader.examples.strategies.ema_cross_long_only import (
+import pandas as pd  # type: ignore[import-untyped]
+from nautilus_trader.adapters.polymarket import POLYMARKET_VENUE  # type: ignore[import-not-found]
+from nautilus_trader.adapters.polymarket import PolymarketDataLoader  # type: ignore[import-not-found]
+from nautilus_trader.analysis.config import TearsheetConfig  # type: ignore[import-not-found]
+from nautilus_trader.analysis.tearsheet import create_tearsheet  # type: ignore[import-not-found]
+from nautilus_trader.backtest.config import BacktestEngineConfig  # type: ignore[import-not-found]
+from nautilus_trader.backtest.engine import BacktestEngine  # type: ignore[import-not-found]
+from nautilus_trader.config import LoggingConfig  # type: ignore[import-not-found]
+from nautilus_trader.examples.strategies.ema_cross_long_only import EMACrossLongOnly  # type: ignore[import-not-found]
+from nautilus_trader.examples.strategies.ema_cross_long_only import (  # type: ignore[import-not-found]
     EMACrossLongOnlyConfig,
 )
-from nautilus_trader.model.currencies import USDC_POS
-from nautilus_trader.model.data import BarType
-from nautilus_trader.model.enums import AccountType
-from nautilus_trader.model.enums import OmsType
-from nautilus_trader.model.identifiers import TraderId
-from nautilus_trader.model.objects import Money
+from nautilus_trader.model.currencies import USDC_POS  # type: ignore[import-not-found]
+from nautilus_trader.model.data import BarType  # type: ignore[import-not-found]
+from nautilus_trader.model.enums import AccountType  # type: ignore[import-not-found]
+from nautilus_trader.model.enums import OmsType  # type: ignore[import-not-found]
+from nautilus_trader.model.identifiers import TraderId  # type: ignore[import-not-found]
+from nautilus_trader.model.objects import Money  # type: ignore[import-not-found]
 
 # ── Strategy metadata (shown in the menu) ────────────────────────────────────
 NAME = "polymarket_ema_cross"

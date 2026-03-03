@@ -6,22 +6,22 @@ catalog, then replays it through a NautilusTrader EMA-cross backtest.
 
 from decimal import Decimal
 
-import pandas as pd
-from nautilus_trader.adapters.kalshi.loaders import KalshiDataLoader
-from nautilus_trader.backtest.config import (
+import pandas as pd  # type: ignore[import-untyped]
+from nautilus_trader.adapters.kalshi.loaders import KalshiDataLoader  # type: ignore[import-not-found]
+from nautilus_trader.backtest.config import (  # type: ignore[import-not-found]
     BacktestDataConfig,
     BacktestEngineConfig,
     BacktestRunConfig,
     BacktestVenueConfig,
 )
-from nautilus_trader.analysis.config import TearsheetConfig
-from nautilus_trader.analysis.tearsheet import create_tearsheet
-from nautilus_trader.backtest.node import BacktestNode
-from nautilus_trader.config import ImportableStrategyConfig, LoggingConfig
-from nautilus_trader.model.data import Bar
-from nautilus_trader.model.identifiers import TraderId, Venue
-from nautilus_trader.persistence.catalog.parquet import ParquetDataCatalog
-from nautilus_trader.risk.config import RiskEngineConfig
+from nautilus_trader.analysis.config import TearsheetConfig  # type: ignore[import-not-found]
+from nautilus_trader.analysis.tearsheet import create_tearsheet  # type: ignore[import-not-found]
+from nautilus_trader.backtest.node import BacktestNode  # type: ignore[import-not-found]
+from nautilus_trader.config import ImportableStrategyConfig, LoggingConfig  # type: ignore[import-not-found]
+from nautilus_trader.model.data import Bar  # type: ignore[import-not-found]
+from nautilus_trader.model.identifiers import TraderId, Venue  # type: ignore[import-not-found]
+from nautilus_trader.persistence.catalog.parquet import ParquetDataCatalog  # type: ignore[import-not-found]
+from nautilus_trader.risk.config import RiskEngineConfig  # type: ignore[import-not-found]
 
 # ── Strategy metadata (shown in the menu) ────────────────────────────────────
 NAME = "kalshi_ema_cross"
