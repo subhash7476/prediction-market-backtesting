@@ -95,7 +95,8 @@ Examples:
 - `nautilus_pm/nautilus_trader/adapters/polymarket/__init__.py`
   Modified on 2026-03-11 and 2026-03-15.
 - `nautilus_pm/nautilus_trader/adapters/polymarket/pmxt.py`
-  Added locally on 2026-03-15 within the LGPL-covered subtree.
+  Added locally on 2026-03-15 and modified on 2026-03-19 within the
+  LGPL-covered subtree.
 - `nautilus_pm/nautilus_trader/adapters/prediction_market/research.py`
   Modified on 2026-03-11, 2026-03-15, and 2026-03-16.
 - `nautilus_pm/nautilus_trader/examples/strategies/prediction_market/core.py`

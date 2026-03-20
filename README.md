@@ -203,33 +203,95 @@ data are:
   - `LOOKBACK_HOURS=4` scans 6 hourly files
   - `LOOKBACK_HOURS=24` scans 26 hourly files
   - `LOOKBACK_HOURS=48` scans 50 hourly files
-- The loader filters to one market and one token, then keeps the filtered
-  `OrderBookDeltas` and `QuoteTick` records in memory for the current run.
-- There is no local PMXT cache in this repo yet. Separate PMXT runs re-download
-  and re-decode the same window.
-- Recent 2-hour sample on
+- For each hour, the loader opens the remote parquet file over HTTPS and pushes
+  down filters for:
+  - `market_id == <condition_id>`
+  - `update_type in {"book_snapshot", "price_change"}`
+- Remote HTTPS reads use in-memory readahead by default with `32 MiB` blocks to
+  reduce small-range-request overhead without writing raw PMXT files to disk.
+- The PMXT parquet schema does not expose `token_id` as its own column. The
+  token lives inside the JSON payload in the `data` column, so token filtering
+  happens after the market-level parquet scan.
+- The loader now processes filtered Arrow record batches incrementally instead
+  of materializing full hourly tables before decode, which reduces cold-load
+  Python overhead and peak memory during remote scans.
+- Each surviving JSON payload is decoded into Nautilus
+  `OrderBookDeltas`/`QuoteTick` records, and the backtest waits for that full
+  ingest to finish before strategy execution starts.
+- Local PMXT disk cache is optional. By default the loader remote-scans the
+  hourly parquet files and does not persist PMXT data to disk. If
+  `PMXT_CACHE_DIR` is set, the loader writes the filtered hourly parquet table
+  for one market/token/hour to:
+
+```text
+~/.cache/nautilus_trader/pmxt/<condition_id>/<token_id>/polymarket_orderbook_YYYY-MM-DDTHH.parquet
+```
+
+- Reuse rules:
+  - same market, same token, same hour: cache hit
+  - same market, same token, overlapping window: overlapping cached hours are reused
+  - same hour, different market: no reuse, because the cache key includes `condition_id`
+  - same market, different token/outcome: no reuse, because the cache key includes `token_id`
+- This means repeated runs of the same PMXT market can get much faster after
+  the first pass if disk cache is enabled, but multi-market runs still pay
+  separate remote reads for the same UTC hour because each market builds its
+  own filtered hourly cache.
+- The loader also prefetches multiple hours in parallel while still yielding
+  them back in chronological order. Configure that with
+  `PMXT_PREFETCH_WORKERS` (default `4`).
+- Cache controls:
+  - `PMXT_CACHE_DIR=1` enables disk cache at `~/.cache/nautilus_trader/pmxt`
+  - `PMXT_CACHE_DIR=/custom/path` enables disk cache at a custom root
+  - `PMXT_DISABLE_CACHE=1` disables local PMXT disk cache entirely
+  - `PMXT_PREFETCH_WORKERS=8` increases hourly prefetch parallelism
+  - `PMXT_HTTP_BLOCK_SIZE_MB=64` increases the in-memory HTTP readahead block size
+  - `PMXT_HTTP_CACHE_TYPE=bytes` switches the HTTP file cache strategy
+- Cache size is currently unbounded. There is no eviction policy or size cap.
+  If disk cache is enabled, it grows with the number of unique
+  `(condition_id, token_id, hour)` tuples you backtest. Very active markets and
+  long lookbacks will produce larger cached parquet files than quiet markets
+  and short windows. Check current size with:
+
+```bash
+du -sh ~/.cache/nautilus_trader/pmxt
+```
+
+- Example: turn on disk cache for a PMXT backtest and use the default cache
+  location:
+
+```bash
+PMXT_CACHE_DIR=1 END_TIME=2026-03-16T13:00:00Z LOOKBACK_HOURS=2 MIN_PRICE_RANGE=0 TRADE_SIZE=10 \
+  uv run python backtests/polymarket_pmxt_ema_crossover.py
+```
+
+- Validation on 2026-03-19 using the OpenAI hardware market
   `will-openai-launch-a-new-consumer-hardware-product-by-march-31-2026`
-  (`END_TIME=2026-03-16T13:00:00Z`, `TRADE_SIZE=10`, HTML enabled):
-  - loader-only scan: `1286` quotes + `1286` delta batches in about `86s`
-  - end-to-end runs:
-    `ema_crossover` `176.214s`,
-    `rsi_reversion` `183.718s`,
-    `spread_capture` `173.466s`
-- Fixed quote-breakout sanity sample on the same market over 4 hours
-  (`2026-03-16T09:00:00Z` to `2026-03-16T13:00:00Z`, `TRADE_SIZE=10`,
-  `MIN_PRICE_RANGE=0`): `2484` quotes, `2` fills, `PnL -0.0350`
-- 48-hour sample on the same market
-  (`2026-03-14T13:00:00Z` to `2026-03-16T13:00:00Z`, `TRADE_SIZE=1`, HTML enabled):
-  - loader-only ingest: `1954.49s` (`32.57m`)
-  - files read: `50` unique hourly parquet files, `100` opens total
-  - ingress measured at the file-read layer: `18.277 GiB`
-  - filtered dataset size: `32819` quotes + `32819` delta batches
-  - strategy runtime after the data is already in memory:
-    `ema_crossover` `3.360s`,
-    `rsi_reversion` `3.325s`,
-    `spread_capture` `3.394s`
-  - if you run those PMXT modules separately today, each run still pays the
-    ~`32.6m` loader cost because the window is not cached locally
+  with `END_TIME=2026-03-16T13:00:00Z`, `LOOKBACK_HOURS=2`,
+  `MIN_PRICE_RANGE=0`, `TRADE_SIZE=10`, and `PMXT_CACHE_DIR=1`:
+  - the first `polymarket_pmxt_ema_crossover.py` run populated `4` cached
+    hourly parquet files in about `17.0s`
+  - the warmed cache footprint for that slice was about `116 KB`
+  - all `backtests/polymarket_pmxt_*.py` entrypoints then exited `0` on the
+    same cached slice
+  - warm cached end-to-end runtimes ranged from about `2.0s` to `3.1s`
+  - each validated PMXT backtest loaded `1286` quotes on that slice
+- Validation on 2026-03-19 using the same market over 48 hours
+  (`END_TIME=2026-03-16T13:00:00Z`, `LOOKBACK_HOURS=48`,
+  `MIN_PRICE_RANGE=0`, `TRADE_SIZE=1`, `PMXT_CACHE_DIR=1`):
+  - the first `polymarket_pmxt_ema_crossover.py` run populated `50` cached
+    hourly parquet files in about `12m 50s` end to end
+  - the warmed cache footprint for that full 48-hour slice was about `1.6 MB`
+  - fresh warm cached end-to-end reruns on the same slice:
+    `ema_crossover` about `1.1s` with `32819` quotes, `26` fills, `PnL -0.0880`
+    `rsi_reversion` about `2.1s` with `32819` quotes, `198` fills, `PnL -0.3610`
+    `spread_capture` about `1.0s` with `32819` quotes, `50` fills, `PnL -0.1808`
+  - repeated runs of that same market/token/window can now reuse overlapping
+    cached hours from local disk instead of re-downloading them
+  - different markets covering the same UTC hours still do not share cache
+    entries, because the cache is market/token scoped
+- Cold uncached PMXT runs still have to remote-scan every unique hour in the
+  requested window, so first-run load time remains dominated by PMXT archive
+  access even after the batch-streaming and HTTP readahead improvements.
 - Short windows can still fail if the selected range never includes usable L2
   book state for that instrument.
 
@@ -303,7 +365,7 @@ Unlike git submodules, subtrees copy upstream code directly into this repo — t
 ## Known Issues
 
 - [ ] APIs rate-limit a lot. Kalshi seems worse. (for trade tick config)
-- [ ] Pulling L2 data from PMXT archives takes an insane amount of time (and data)
+- [ ] Cold PMXT L2 loads still take a long time; multi-market runs do not yet share a raw per-hour cache, and optional filtered-disk-cache growth is currently unbounded
 
 ## License
 

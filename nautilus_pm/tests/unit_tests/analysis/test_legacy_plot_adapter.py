@@ -368,7 +368,11 @@ def test_create_legacy_backtest_chart_saves_final_layout_without_requiring_brier
     )
     monkeypatch.setattr(adapter, "_build_metrics", lambda *args, **kwargs: {})
     monkeypatch.setattr(adapter, "_platform_enum", lambda *args, **kwargs: "KALSHI")
-    monkeypatch.setattr(adapter, "_apply_layout_overrides", lambda layout, initial_cash: layout)
+    monkeypatch.setattr(
+        adapter,
+        "_apply_layout_overrides",
+        lambda layout, initial_cash, **kwargs: layout,
+    )
     monkeypatch.setattr(
         adapter,
         "prepare_cumulative_brier_advantage",
@@ -448,7 +452,11 @@ def test_create_legacy_backtest_chart_saves_placeholder_brier_panel_when_outcome
     )
     monkeypatch.setattr(adapter, "_build_metrics", lambda *args, **kwargs: {})
     monkeypatch.setattr(adapter, "_platform_enum", lambda *args, **kwargs: "KALSHI")
-    monkeypatch.setattr(adapter, "_apply_layout_overrides", lambda layout, initial_cash: layout)
+    monkeypatch.setattr(
+        adapter,
+        "_apply_layout_overrides",
+        lambda layout, initial_cash, **kwargs: layout,
+    )
     monkeypatch.setattr(
         adapter,
         "prepare_cumulative_brier_advantage",
