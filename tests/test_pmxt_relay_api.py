@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import os
 from pathlib import Path
+from unittest.mock import patch
 
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -213,6 +214,92 @@ def test_badge_endpoints_return_shields_payloads(tmp_path: Path):
             "message": "1 hrs",
             "color": "green",
         }
+
+    asyncio.run(scenario())
+
+
+def test_badge_svg_endpoints_return_svg(tmp_path: Path):
+    async def scenario() -> None:
+        config = _make_config(tmp_path)
+        config.ensure_directories()
+        filename = "polymarket_orderbook_2026-03-21T12.parquet"
+
+        app = create_app(config)
+        index = app[INDEX_APP_KEY]
+        index.upsert_discovered_hour(
+            filename,
+            f"https://r2.pmxt.dev/{filename}",
+            1,
+        )
+        index.mark_mirrored(
+            filename,
+            local_path="/tmp/raw.parquet",
+            etag=None,
+            content_length=None,
+            last_modified=None,
+        )
+        index.replace_filtered_hours(filename, [])
+
+        server = TestServer(app)
+        client = TestClient(server)
+        await client.start_server()
+        try:
+            status_response = await client.get("/v1/badge/status.svg")
+            assert status_response.status == 200
+            assert status_response.headers["Content-Type"].startswith("image/svg+xml")
+            svg = await status_response.text()
+        finally:
+            await client.close()
+
+        assert "PMXT relay" in svg
+        assert "starting" in svg
+        assert "<svg" in svg
+
+    asyncio.run(scenario())
+
+
+def test_system_endpoints_return_live_metrics_and_svg(tmp_path: Path):
+    async def scenario() -> None:
+        config = _make_config(tmp_path)
+        config.ensure_directories()
+        app = create_app(config)
+
+        server = TestServer(app)
+        client = TestClient(server)
+        await client.start_server()
+        try:
+            with patch(
+                "pmxt_relay.api._system_metrics_snapshot",
+                return_value={
+                    "cpu_percent": 12.5,
+                    "mem_percent": 34.0,
+                    "disk_percent": 56.5,
+                },
+            ):
+                metrics_response = await client.get("/v1/system")
+                assert metrics_response.status == 200
+                metrics_payload = await metrics_response.json()
+
+                cpu_badge = await client.get("/v1/badge/cpu.svg")
+                mem_badge = await client.get("/v1/badge/mem.svg")
+                disk_badge = await client.get("/v1/badge/disk.svg")
+                assert cpu_badge.status == 200
+                assert mem_badge.status == 200
+                assert disk_badge.status == 200
+                cpu_svg = await cpu_badge.text()
+                mem_svg = await mem_badge.text()
+                disk_svg = await disk_badge.text()
+        finally:
+            await client.close()
+
+        assert metrics_payload == {
+            "cpu_percent": 12.5,
+            "mem_percent": 34.0,
+            "disk_percent": 56.5,
+        }
+        assert "Relay CPU" in cpu_svg and "12.5%" in cpu_svg
+        assert "Relay mem" in mem_svg and "34.0%" in mem_svg
+        assert "Relay disk" in disk_svg and "56.5%" in disk_svg
 
     asyncio.run(scenario())
 
@@ -464,5 +551,128 @@ def test_filtered_api_materializes_cached_file_from_processed_hour(tmp_path: Pat
             },
             {"update_type": "price_change", "data": '{"token_id":"123456789","seq":2}'},
         ]
+
+    asyncio.run(scenario())
+
+
+def test_filtered_api_materializes_from_processed_hour_without_filtered_index(
+    tmp_path: Path,
+):
+    async def scenario() -> None:
+        config = _make_config(tmp_path)
+        config.ensure_directories()
+        filename = "polymarket_orderbook_2026-03-21T12.parquet"
+        processed_path = config.processed_root / "2026" / "03" / "21" / filename
+        processed_path.parent.mkdir(parents=True, exist_ok=True)
+        pq.write_table(
+            pa.table(
+                {
+                    "market_id": ["0x" + ("ab" * 32), "0x" + ("ab" * 32), "other"],
+                    "token_id": ["123456789", "123456789", "999"],
+                    "update_type": [
+                        "book_snapshot",
+                        "price_change",
+                        "price_change",
+                    ],
+                    "data": [
+                        '{"token_id":"123456789","seq":1}',
+                        '{"token_id":"123456789","seq":2}',
+                        '{"token_id":"999","seq":3}',
+                    ],
+                }
+            ),
+            processed_path,
+        )
+
+        app = create_app(config)
+        index = app[INDEX_APP_KEY]
+        index.upsert_discovered_hour(
+            filename,
+            f"https://r2.pmxt.dev/{filename}",
+            1,
+        )
+        index.mark_mirrored(
+            filename,
+            local_path="/tmp/raw.parquet",
+            etag=None,
+            content_length=None,
+            last_modified=None,
+        )
+        index.mark_processed(filename)
+
+        server = TestServer(app)
+        client = TestClient(server)
+        await client.start_server()
+        try:
+            response = await client.get(
+                "/v1/filtered/" + ("0x" + ("ab" * 32)) + "/123456789/" + filename
+            )
+            assert response.status == 200
+            await response.read()
+        finally:
+            await client.close()
+
+        cached_path = (
+            config.filtered_root / ("0x" + ("ab" * 32)) / "123456789" / filename
+        )
+        assert cached_path.exists()
+        assert pq.read_table(cached_path).to_pylist() == [
+            {
+                "update_type": "book_snapshot",
+                "data": '{"token_id":"123456789","seq":1}',
+            },
+            {"update_type": "price_change", "data": '{"token_id":"123456789","seq":2}'},
+        ]
+
+    asyncio.run(scenario())
+
+
+def test_filtered_api_returns_404_when_processed_hour_has_no_matching_token(
+    tmp_path: Path,
+):
+    async def scenario() -> None:
+        config = _make_config(tmp_path)
+        config.ensure_directories()
+        filename = "polymarket_orderbook_2026-03-21T12.parquet"
+        processed_path = config.processed_root / "2026" / "03" / "21" / filename
+        processed_path.parent.mkdir(parents=True, exist_ok=True)
+        pq.write_table(
+            pa.table(
+                {
+                    "market_id": ["0x" + ("ab" * 32)],
+                    "token_id": ["111"],
+                    "update_type": ["book_snapshot"],
+                    "data": ['{"token_id":"111","seq":1}'],
+                }
+            ),
+            processed_path,
+        )
+
+        app = create_app(config)
+        index = app[INDEX_APP_KEY]
+        index.upsert_discovered_hour(
+            filename,
+            f"https://r2.pmxt.dev/{filename}",
+            1,
+        )
+        index.mark_mirrored(
+            filename,
+            local_path="/tmp/raw.parquet",
+            etag=None,
+            content_length=None,
+            last_modified=None,
+        )
+        index.mark_processed(filename)
+
+        server = TestServer(app)
+        client = TestClient(server)
+        await client.start_server()
+        try:
+            response = await client.get(
+                "/v1/filtered/" + ("0x" + ("ab" * 32)) + "/999/" + filename
+            )
+            assert response.status == 404
+        finally:
+            await client.close()
 
     asyncio.run(scenario())

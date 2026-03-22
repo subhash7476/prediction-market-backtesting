@@ -18,10 +18,13 @@
 ![GitHub open issues](https://img.shields.io/github/issues/evan-kolberg/prediction-market-backtesting)
 
 Relay VPS:
-[![PMXT relay](https://img.shields.io/website?url=http%3A%2F%2F209.209.10.83%3A8080%2Fhealthz&label=PMXT%20relay)](http://209.209.10.83:8080/v1/stats)
-[![PMXT backfill](https://img.shields.io/badge/dynamic/json?url=http%3A%2F%2F209.209.10.83%3A8080%2Fv1%2Fbadge%2Fbackfill&query=%24.message&label=PMXT%20backfill&color=orange)](http://209.209.10.83:8080/v1/stats)
-[![PMXT latest](https://img.shields.io/badge/dynamic/json?url=http%3A%2F%2F209.209.10.83%3A8080%2Fv1%2Fbadge%2Flatest%3Fv%3D2&query=%24.message&label=PMXT%20latest&color=blue)](http://209.209.10.83:8080/v1/queue)
-[![PMXT lag](https://img.shields.io/badge/dynamic/json?url=http%3A%2F%2F209.209.10.83%3A8080%2Fv1%2Fbadge%2Flag%3Fv%3D2&query=%24.message&label=PMXT%20lag&color=yellowgreen)](http://209.209.10.83:8080/v1/queue)
+[![PMXT relay](https://209-209-10-83.sslip.io/v1/badge/status.svg)](https://209-209-10-83.sslip.io/v1/stats)
+[![PMXT backfill](https://209-209-10-83.sslip.io/v1/badge/backfill.svg)](https://209-209-10-83.sslip.io/v1/stats)
+[![PMXT latest](https://209-209-10-83.sslip.io/v1/badge/latest.svg?v=3)](https://209-209-10-83.sslip.io/v1/queue)
+[![PMXT lag](https://209-209-10-83.sslip.io/v1/badge/lag.svg?v=3)](https://209-209-10-83.sslip.io/v1/queue)
+[![Relay CPU](https://209-209-10-83.sslip.io/v1/badge/cpu.svg)](https://209-209-10-83.sslip.io/v1/system)
+[![Relay mem](https://209-209-10-83.sslip.io/v1/badge/mem.svg)](https://209-209-10-83.sslip.io/v1/system)
+[![Relay disk](https://209-209-10-83.sslip.io/v1/badge/disk.svg)](https://209-209-10-83.sslip.io/v1/system)
 
 Backtesting framework for prediction market trading strategies on [Kalshi](https://kalshi.com) and [Polymarket](https://polymarket.com), built off of [NautilusTrader](https://github.com/nautechsystems/nautilus_trader) with custom exchange adapters. More focus on Polymarket because of the free availability of L2 data.
 
@@ -197,11 +200,11 @@ data are:
 ### PMXT Polymarket L2
 
 - Public Polymarket PMXT runners now default to the public relay at
-  `http://209.209.10.83:8080`.
+  `https://209-209-10-83.sslip.io`.
 - For each required hour, the loader tries the relay first:
 
 ```text
-http://209.209.10.83:8080/v1/filtered/<condition_id>/<token_id>/polymarket_orderbook_YYYY-MM-DDTHH.parquet
+https://209-209-10-83.sslip.io/v1/filtered/<condition_id>/<token_id>/polymarket_orderbook_YYYY-MM-DDTHH.parquet
 ```
 
   and only falls back to the raw PMXT archive on `r2.pmxt.dev` if that relay
@@ -243,8 +246,8 @@ http://209.209.10.83:8080/v1/filtered/<condition_id>/<token_id>/polymarket_order
     relay-backed path took about `14.02s` versus `189.18s` with
     `PMXT_RELAY_BASE_URL=0`, while producing the same fills and PnL
 - Relay controls:
-  - default relay: `http://209.209.10.83:8080`
-  - `PMXT_RELAY_BASE_URL=http://your-relay-host:8080` overrides the relay host
+  - default relay: `https://209-209-10-83.sslip.io`
+  - `PMXT_RELAY_BASE_URL=https://your-relay-host` overrides the relay host
   - `PMXT_RELAY_BASE_URL=0` disables relay usage and forces raw archive scans
 - Raw fallback tuning:
   - `PMXT_PREFETCH_WORKERS=8` changes hourly prefetch parallelism
@@ -356,12 +359,14 @@ The full deployment and hardening notes live in
 Relay progress can be checked over HTTP:
 
 - `/v1/stats` for high-level counts
+- `/v1/system` for live CPU, memory, and relay-disk usage
 - `/v1/queue` for `pending/processing/error` queue state
 - `/v1/events?limit=100` for recent discover/download/process/error events
 - `/v1/inflight` for active temp-tree progress while a large hour is still
   being crunched
-- `/v1/badge/status`, `/v1/badge/backfill`, `/v1/badge/latest`, and
-  `/v1/badge/lag` for the live README status tags
+- `/v1/badge/status`, `/v1/badge/backfill`, `/v1/badge/latest`,
+  `/v1/badge/lag`, `/v1/badge/cpu`, `/v1/badge/mem`, and
+  `/v1/badge/disk` for the live README status tags
 
 The relay mirrors the full PMXT archive and stores a single processed shard per
 hour alongside the on-demand filtered cache. Any single PMXT backtest only

@@ -15,6 +15,7 @@ from pmxt_relay.config import RelayConfig
 from pmxt_relay.index_db import RelayIndex
 from pmxt_relay.processor import RelayHourProcessor
 from pmxt_relay.storage import filtered_relative_path
+from pmxt_relay.storage import processed_relative_path
 from pmxt_relay.storage import raw_relative_path
 
 
@@ -163,6 +164,26 @@ class RelayWorker:
         raw_path = self._config.raw_root / raw_relative_path(filename)
         raw_path.parent.mkdir(parents=True, exist_ok=True)
         self._index.mark_mirroring(filename)
+        if raw_path.exists() and raw_path.stat().st_size > 0:
+            self._index.mark_mirrored(
+                filename,
+                local_path=str(raw_path),
+                etag=None,
+                content_length=raw_path.stat().st_size,
+                last_modified=None,
+            )
+            self._record_event(
+                level="INFO",
+                event_type="mirror_reuse",
+                filename=filename,
+                message=f"Reused mirrored raw hour for {filename}",
+                payload={
+                    "destination_path": str(raw_path),
+                    "byte_size": raw_path.stat().st_size,
+                },
+            )
+            LOG.info("Reused mirrored raw hour %s from %s", filename, raw_path)
+            return
         self._record_event(
             level="INFO",
             event_type="mirror_start",
@@ -232,6 +253,26 @@ class RelayWorker:
         ):
             filename = row["filename"]
             raw_path = Path(row["local_path"])
+            processed_path = self._config.processed_root / processed_relative_path(
+                filename
+            )
+            if processed_path.exists() and processed_path.stat().st_size > 0:
+                self._index.mark_processed(filename)
+                self._record_event(
+                    level="INFO",
+                    event_type="process_reuse",
+                    filename=filename,
+                    message=f"Reused processed shard for {filename}",
+                    payload={
+                        "processed_path": str(processed_path),
+                        "byte_size": processed_path.stat().st_size,
+                    },
+                )
+                LOG.info("Reused processed shard %s from %s", filename, processed_path)
+                processed += 1
+                if limit is not None and processed >= limit:
+                    break
+                continue
             self._index.mark_processing(filename)
             self._record_event(
                 level="INFO",
@@ -241,8 +282,22 @@ class RelayWorker:
                 payload={"raw_path": str(raw_path)},
             )
             existing_rows = self._index.list_filtered_for_filename(filename)
+            last_reported_rows = -1
+            last_report_monotonic = 0.0
 
             def report_progress(processed_rows: int, total_rows: int) -> None:
+                nonlocal last_reported_rows, last_report_monotonic
+                current = time.monotonic()
+                should_log = (
+                    processed_rows >= total_rows
+                    or last_reported_rows < 0
+                    or (processed_rows - last_reported_rows) >= 5_000_000
+                    or (current - last_report_monotonic) >= 5.0
+                )
+                if not should_log:
+                    return
+                last_reported_rows = processed_rows
+                last_report_monotonic = current
                 self._record_event(
                     level="INFO",
                     event_type="process_progress",
@@ -289,7 +344,7 @@ class RelayWorker:
                 else:
                     existing_path.unlink(missing_ok=True)
 
-            self._index.replace_filtered_hours(filename, artifacts)
+            self._index.mark_processed(filename)
             self._record_event(
                 level="INFO",
                 event_type="process_complete",

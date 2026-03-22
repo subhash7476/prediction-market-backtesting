@@ -53,7 +53,7 @@ def test_resolve_relay_base_url_parses_env(monkeypatch):
     monkeypatch.delenv(PolymarketPMXTDataLoader._PMXT_RELAY_BASE_URL_ENV, raising=False)
     assert (
         PolymarketPMXTDataLoader._resolve_relay_base_url()
-        == "http://209.209.10.83:8080"
+        == "https://209-209-10-83.sslip.io"
     )
 
     monkeypatch.setenv(

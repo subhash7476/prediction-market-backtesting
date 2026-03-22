@@ -32,7 +32,11 @@ class RelayIndex:
         self._conn.row_factory = sqlite3.Row
         self._event_retention = event_retention
         self._conn.execute("PRAGMA journal_mode=WAL")
+        self._conn.execute("PRAGMA synchronous=NORMAL")
+        self._conn.execute("PRAGMA temp_store=MEMORY")
+        self._conn.execute("PRAGMA wal_autocheckpoint=2000")
         self._conn.execute("PRAGMA foreign_keys=ON")
+        self._events_since_prune = 0
 
     def initialize(self, *, reset_inflight: bool = False) -> tuple[int, int]:
         self._conn.executescript(
@@ -87,9 +91,26 @@ class RelayIndex:
             """
         )
         self._conn.commit()
+        self.prune_events()
         if reset_inflight:
             return self.reset_inflight_work()
         return 0, 0
+
+    def prune_events(self) -> None:
+        with self._conn:
+            self._conn.execute(
+                """
+                DELETE FROM relay_events
+                WHERE id NOT IN (
+                    SELECT id
+                    FROM relay_events
+                    ORDER BY id DESC
+                    LIMIT ?
+                )
+                """,
+                (self._event_retention,),
+            )
+        self._events_since_prune = 0
 
     def reset_inflight_work(self) -> tuple[int, int]:
         with self._conn:
@@ -291,6 +312,17 @@ class RelayIndex:
                 (_utc_now(), filename),
             )
 
+    def mark_processed(self, filename: str) -> None:
+        with self._conn:
+            self._conn.execute(
+                """
+                UPDATE archive_hours
+                SET process_status = 'ready', processed_at = ?, last_error = NULL
+                WHERE filename = ?
+                """,
+                (_utc_now(), filename),
+            )
+
     def list_filtered_for_filename(self, filename: str) -> list[sqlite3.Row]:
         cursor = self._conn.execute(
             """
@@ -423,18 +455,10 @@ class RelayIndex:
                 """,
                 (_utc_now(), level, event_type, filename, message, payload_json),
             )
-            self._conn.execute(
-                """
-                DELETE FROM relay_events
-                WHERE id NOT IN (
-                    SELECT id
-                    FROM relay_events
-                    ORDER BY id DESC
-                    LIMIT ?
-                )
-                """,
-                (self._event_retention,),
-            )
+        self._events_since_prune += 1
+        prune_threshold = 1 if self._event_retention <= 250 else 250
+        if self._events_since_prune >= prune_threshold:
+            self.prune_events()
 
     def recent_events(self, *, limit: int = 100) -> list[sqlite3.Row]:
         cursor = self._conn.execute(

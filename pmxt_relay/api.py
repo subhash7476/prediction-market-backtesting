@@ -9,6 +9,9 @@ from collections import defaultdict, deque
 import json
 import os
 from pathlib import Path
+import shutil
+import time as time_module
+from xml.sax.saxutils import escape
 
 from aiohttp import web
 
@@ -16,6 +19,7 @@ from pmxt_relay.config import RelayConfig
 from pmxt_relay.index_db import RelayIndex
 from pmxt_relay.processor import materialize_filtered_hour
 from pmxt_relay.processor import materialize_partition_dir
+from pmxt_relay.storage import processed_relative_path
 
 _CONDITION_ID_RE = re.compile(r"^0x[a-f0-9]{64}$", re.IGNORECASE)
 _TOKEN_ID_RE = re.compile(r"^\d+$")
@@ -34,6 +38,131 @@ _SECURITY_HEADERS = {
     "X-Frame-Options": "DENY",
 }
 _BADGE_SCHEMA_VERSION = 1
+_BADGE_LABEL_COLOR = "#555"
+_BADGE_COLOR_HEX = {
+    "blue": "#007ec6",
+    "brightgreen": "#4c1",
+    "green": "#97ca00",
+    "lightgrey": "#9f9f9f",
+    "orange": "#fe7d37",
+    "red": "#e05d44",
+    "yellow": "#dfb317",
+    "yellowgreen": "#a4a61d",
+}
+
+
+def _badge_color_hex(color: str) -> str:
+    return _BADGE_COLOR_HEX.get(color, color)
+
+
+def _badge_text_width(text: str) -> int:
+    return max(12, (len(text) * 7) + 10)
+
+
+def _badge_svg(payload: dict[str, object]) -> str:
+    label = escape(str(payload["label"]))
+    message = escape(str(payload["message"]))
+    label_width = _badge_text_width(label)
+    message_width = _badge_text_width(message)
+    total_width = label_width + message_width
+    label_center = label_width / 2
+    message_center = label_width + (message_width / 2)
+    message_color = _badge_color_hex(str(payload["color"]))
+    return (
+        f'<svg xmlns="http://www.w3.org/2000/svg" width="{total_width}" height="20" role="img" '
+        f'aria-label="{label}: {message}">'
+        '<linearGradient id="s" x2="0" y2="100%">'
+        '<stop offset="0" stop-color="#fff" stop-opacity=".7"/>'
+        '<stop offset=".1" stop-color="#aaa" stop-opacity=".1"/>'
+        '<stop offset=".9" stop-opacity=".3"/>'
+        '<stop offset="1" stop-opacity=".5"/>'
+        "</linearGradient>"
+        '<clipPath id="r"><rect width="100%" height="20" rx="3" fill="#fff"/></clipPath>'
+        '<g clip-path="url(#r)">'
+        f'<rect width="{label_width}" height="20" fill="{_BADGE_LABEL_COLOR}"/>'
+        f'<rect x="{label_width}" width="{message_width}" height="20" fill="{message_color}"/>'
+        f'<rect width="{total_width}" height="20" fill="url(#s)"/>'
+        "</g>"
+        '<g fill="#fff" text-anchor="middle" '
+        'font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Helvetica,Arial,sans-serif" '
+        'font-size="11">'
+        f'<text x="{label_center}" y="15" fill="#010101" fill-opacity=".3">{label}</text>'
+        f'<text x="{label_center}" y="14">{label}</text>'
+        f'<text x="{message_center}" y="15" fill="#010101" fill-opacity=".3">{message}</text>'
+        f'<text x="{message_center}" y="14">{message}</text>'
+        "</g>"
+        "</svg>"
+    )
+
+
+def _badge_svg_response(payload: dict[str, object]) -> web.Response:
+    return web.Response(
+        text=_badge_svg(payload),
+        content_type="image/svg+xml",
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+def _usage_color(percent: float) -> str:
+    if percent >= 90.0:
+        return "red"
+    if percent >= 75.0:
+        return "orange"
+    if percent >= 50.0:
+        return "yellow"
+    return "brightgreen"
+
+
+def _read_cpu_totals() -> tuple[int, int]:
+    with Path("/proc/stat").open() as handle:
+        parts = handle.readline().split()
+    values = [int(value) for value in parts[1:]]
+    idle = values[3] + (values[4] if len(values) > 4 else 0)
+    total = sum(values)
+    return idle, total
+
+
+def _sample_cpu_percent(interval_secs: float = 0.1) -> float:
+    idle_before, total_before = _read_cpu_totals()
+    time_module.sleep(interval_secs)
+    idle_after, total_after = _read_cpu_totals()
+    total_delta = max(1, total_after - total_before)
+    idle_delta = max(0, idle_after - idle_before)
+    used_fraction = 1.0 - min(1.0, idle_delta / total_delta)
+    return max(0.0, min(100.0, used_fraction * 100.0))
+
+
+def _memory_percent() -> float:
+    values: dict[str, int] = {}
+    with Path("/proc/meminfo").open() as handle:
+        for line in handle:
+            key, raw = line.split(":", 1)
+            values[key] = int(raw.strip().split()[0])
+    total = max(1, values["MemTotal"])
+    available = values.get("MemAvailable", values.get("MemFree", 0))
+    used = max(0, total - available)
+    return (used / total) * 100.0
+
+
+def _disk_percent(path: Path) -> float:
+    usage = shutil.disk_usage(path)
+    return (usage.used / max(1, usage.total)) * 100.0
+
+
+def _system_metrics_snapshot(config: RelayConfig) -> dict[str, float]:
+    return {
+        "cpu_percent": round(_sample_cpu_percent(), 1),
+        "mem_percent": round(_memory_percent(), 1),
+        "disk_percent": round(_disk_percent(config.data_dir), 1),
+    }
+
+
+def _system_badge_payload(label: str, percent: float) -> dict[str, object]:
+    return _badge_payload(
+        label=label,
+        message=f"{percent:.1f}%",
+        color=_usage_color(percent),
+    )
 
 
 def _iso_hour_query(value: str | None) -> str | None:
@@ -313,22 +442,29 @@ async def hardening_middleware(
     request: web.Request,
     handler,
 ) -> web.StreamResponse:
+    def _apply_headers(response: web.StreamResponse) -> None:
+        response.headers.pop("Server", None)
+        response.headers.setdefault("Cache-Control", _CACHE_CONTROL_JSON)
+        for header, value in _SECURITY_HEADERS.items():
+            response.headers.setdefault(header, value)
+
     limiter = request.app[RATE_LIMITER_APP_KEY]
     client_id = _client_id(request)
     if not limiter.allow(client_id):
-        response: web.StreamResponse = web.HTTPTooManyRequests(
+        exc = web.HTTPTooManyRequests(
             text="rate limit exceeded",
             headers={"Retry-After": "60"},
         )
-    else:
-        try:
-            response = await handler(request)
-        except web.HTTPException as exc:
-            response = exc
-    response.headers.pop("Server", None)
-    response.headers.setdefault("Cache-Control", _CACHE_CONTROL_JSON)
-    for header, value in _SECURITY_HEADERS.items():
-        response.headers.setdefault(header, value)
+        _apply_headers(exc)
+        raise exc
+
+    try:
+        response = await handler(request)
+    except web.HTTPException as exc:
+        _apply_headers(exc)
+        raise
+
+    _apply_headers(response)
     return response
 
 
@@ -384,6 +520,12 @@ async def inflight(request: web.Request) -> web.Response:
     return web.json_response({"inflight": _collect_inflight_processes(config)})
 
 
+async def system_metrics(request: web.Request) -> web.Response:
+    config = request.app[CONFIG_APP_KEY]
+    payload = await asyncio.to_thread(_system_metrics_snapshot, config)
+    return web.json_response(payload)
+
+
 async def badge_status(request: web.Request) -> web.Response:
     config = request.app[CONFIG_APP_KEY]
     index = request.app[INDEX_APP_KEY]
@@ -405,6 +547,55 @@ async def badge_latest(request: web.Request) -> web.Response:
 async def badge_lag(request: web.Request) -> web.Response:
     index = request.app[INDEX_APP_KEY]
     return web.json_response(_lag_badge_payload(stats=index.stats()))
+
+
+async def badge_cpu_svg(request: web.Request) -> web.Response:
+    config = request.app[CONFIG_APP_KEY]
+    metrics = await asyncio.to_thread(_system_metrics_snapshot, config)
+    return _badge_svg_response(
+        _system_badge_payload("Relay CPU", float(metrics["cpu_percent"]))
+    )
+
+
+async def badge_mem_svg(request: web.Request) -> web.Response:
+    config = request.app[CONFIG_APP_KEY]
+    metrics = await asyncio.to_thread(_system_metrics_snapshot, config)
+    return _badge_svg_response(
+        _system_badge_payload("Relay mem", float(metrics["mem_percent"]))
+    )
+
+
+async def badge_disk_svg(request: web.Request) -> web.Response:
+    config = request.app[CONFIG_APP_KEY]
+    metrics = await asyncio.to_thread(_system_metrics_snapshot, config)
+    return _badge_svg_response(
+        _system_badge_payload("Relay disk", float(metrics["disk_percent"]))
+    )
+
+
+async def badge_status_svg(request: web.Request) -> web.Response:
+    config = request.app[CONFIG_APP_KEY]
+    index = request.app[INDEX_APP_KEY]
+    return _badge_svg_response(
+        _status_badge_payload(stats=index.stats(), config=config)
+    )
+
+
+async def badge_backfill_svg(request: web.Request) -> web.Response:
+    index = request.app[INDEX_APP_KEY]
+    return _badge_svg_response(_backfill_badge_payload(stats=index.stats()))
+
+
+async def badge_latest_svg(request: web.Request) -> web.Response:
+    index = request.app[INDEX_APP_KEY]
+    return _badge_svg_response(
+        _latest_processed_badge_payload(queue=index.queue_summary())
+    )
+
+
+async def badge_lag_svg(request: web.Request) -> web.Response:
+    index = request.app[INDEX_APP_KEY]
+    return _badge_svg_response(_lag_badge_payload(stats=index.stats()))
 
 
 async def list_filtered_hours(request: web.Request) -> web.Response:
@@ -470,22 +661,33 @@ async def serve_filtered(request: web.Request) -> web.StreamResponse:
         return response
 
     row = index.get_filtered_hour(condition_id, token_id, filename)
-    if row is None:
-        raise web.HTTPNotFound(text="filtered hour not found")
+    if row is not None:
+        local_path = Path(row["local_path"])
+    else:
+        local_path = config.processed_root / processed_relative_path(filename)
+        if not local_path.exists():
+            legacy_partition_dir = (
+                config.processed_root / filename / condition_id / token_id
+            )
+            local_path = legacy_partition_dir
+            if not local_path.exists():
+                raise web.HTTPNotFound(text="filtered hour not found")
 
-    local_path = Path(row["local_path"])
     if local_path.is_file():
         materialize_locks = request.app[MATERIALIZE_LOCKS_APP_KEY]
         lock = materialize_locks.setdefault(str(cache_path), asyncio.Lock())
         async with lock:
             if not cache_path.exists():
-                await asyncio.to_thread(
-                    materialize_filtered_hour,
-                    local_path,
-                    cache_path,
-                    condition_id=condition_id,
-                    token_id=token_id,
-                )
+                try:
+                    await asyncio.to_thread(
+                        materialize_filtered_hour,
+                        local_path,
+                        cache_path,
+                        condition_id=condition_id,
+                        token_id=token_id,
+                    )
+                except FileNotFoundError as exc:
+                    raise web.HTTPNotFound(text="filtered hour not found") from exc
         response = web.FileResponse(cache_path)
         response.headers["Cache-Control"] = _CACHE_CONTROL_FILE
         return response
@@ -496,7 +698,12 @@ async def serve_filtered(request: web.Request) -> web.StreamResponse:
     lock = materialize_locks.setdefault(str(cache_path), asyncio.Lock())
     async with lock:
         if not cache_path.exists():
-            await asyncio.to_thread(materialize_partition_dir, local_path, cache_path)
+            try:
+                await asyncio.to_thread(
+                    materialize_partition_dir, local_path, cache_path
+                )
+            except FileNotFoundError as exc:
+                raise web.HTTPNotFound(text="filtered hour not found") from exc
 
     response = web.FileResponse(cache_path)
     response.headers["Cache-Control"] = _CACHE_CONTROL_FILE
@@ -532,10 +739,18 @@ def create_app(config: RelayConfig) -> web.Application:
     app.router.add_get("/v1/queue", queue)
     app.router.add_get("/v1/events", events)
     app.router.add_get("/v1/inflight", inflight)
+    app.router.add_get("/v1/system", system_metrics)
     app.router.add_get("/v1/badge/status", badge_status)
     app.router.add_get("/v1/badge/backfill", badge_backfill)
     app.router.add_get("/v1/badge/latest", badge_latest)
     app.router.add_get("/v1/badge/lag", badge_lag)
+    app.router.add_get("/v1/badge/status.svg", badge_status_svg)
+    app.router.add_get("/v1/badge/backfill.svg", badge_backfill_svg)
+    app.router.add_get("/v1/badge/latest.svg", badge_latest_svg)
+    app.router.add_get("/v1/badge/lag.svg", badge_lag_svg)
+    app.router.add_get("/v1/badge/cpu.svg", badge_cpu_svg)
+    app.router.add_get("/v1/badge/mem.svg", badge_mem_svg)
+    app.router.add_get("/v1/badge/disk.svg", badge_disk_svg)
     app.router.add_get(
         "/v1/markets/{condition_id}/tokens/{token_id}/hours",
         list_filtered_hours,

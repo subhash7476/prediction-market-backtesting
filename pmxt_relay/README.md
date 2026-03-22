@@ -163,13 +163,13 @@ Progress and observability:
 The PMXT loader in this repo now defaults to the public relay at:
 
 ```bash
-http://209.209.10.83:8080
+https://209-209-10-83.sslip.io
 ```
 
 You can override that with:
 
 ```bash
-PMXT_RELAY_BASE_URL=http://your-relay-host:8080
+PMXT_RELAY_BASE_URL=https://your-relay-host
 ```
 
 Or disable relay usage entirely with:
@@ -188,7 +188,7 @@ Common env vars:
 - `PMXT_RELAY_DATA_DIR=/srv/pmxt-relay`
 - `PMXT_RELAY_BIND_HOST=0.0.0.0`
 - `PMXT_RELAY_BIND_PORT=8080`
-- `PMXT_RELAY_PUBLIC_BASE_URL=http://209.209.10.83:8080`
+- `PMXT_RELAY_PUBLIC_BASE_URL=https://209-209-10-83.sslip.io`
 - `PMXT_RELAY_POLL_INTERVAL_SECS=900`
 - `PMXT_RELAY_EXPOSE_RAW=0`
 - `PMXT_RELAY_API_RATE_LIMIT_PER_MINUTE=2400`
