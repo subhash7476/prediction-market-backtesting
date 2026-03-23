@@ -439,7 +439,9 @@ class RelayWorker:
                         "filtered_rows": result.total_filtered_rows,
                     },
                 )
-                LOG.info("Processed %s into %s filtered files", filename, len(artifacts))
+                LOG.info(
+                    "Processed %s into %s filtered files", filename, len(artifacts)
+                )
             processed += 1
             if limit is not None and processed >= limit:
                 break

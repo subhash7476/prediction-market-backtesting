@@ -252,8 +252,11 @@ def test_error_count_exhausts_retries_after_three_failures(tmp_path: Path):
 
     # Success resets error_count
     index.mark_mirrored(
-        filename, local_path="/tmp/a", etag=None,
-        content_length=None, last_modified=None,
+        filename,
+        local_path="/tmp/a",
+        etag=None,
+        content_length=None,
+        last_modified=None,
     )
     index.mark_process_error(filename, "corrupt 1")
     assert len(index.list_hours_needing_process()) == 1
@@ -276,8 +279,11 @@ def test_mark_prebuilt_registers_artifacts_in_filtered_hours(tmp_path: Path):
     filename = "polymarket_orderbook_2026-03-21T12.parquet"
     index.upsert_discovered_hour(filename, "https://r2.pmxt.dev/" + filename, 1)
     index.mark_mirrored(
-        filename, local_path="/tmp/a", etag=None,
-        content_length=None, last_modified=None,
+        filename,
+        local_path="/tmp/a",
+        etag=None,
+        content_length=None,
+        last_modified=None,
     )
     index.mark_sharded(filename)
 
@@ -328,8 +334,11 @@ def test_mark_prebuilt_without_artifacts_does_not_touch_filtered_hours(tmp_path:
     filename = "polymarket_orderbook_2026-03-21T12.parquet"
     index.upsert_discovered_hour(filename, "https://r2.pmxt.dev/" + filename, 1)
     index.mark_mirrored(
-        filename, local_path="/tmp/a", etag=None,
-        content_length=None, last_modified=None,
+        filename,
+        local_path="/tmp/a",
+        etag=None,
+        content_length=None,
+        last_modified=None,
     )
     index.mark_sharded(filename)
 
