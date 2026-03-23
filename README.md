@@ -306,6 +306,8 @@ The repo now includes a self-hosted relay implementation under
 
 > PLEASE do NOT try to break into the VPS. There is nothing valuable on it; it is a mirror to speed things up. With this, please do not misuse the API. It's here for you to use, not abuse.
 
+> The public relay has 4TB of storage, 6 GB of ram, and 4 shared vCPU's
+
 The relay is built to solve the PMXT cold-start problem without changing the
 backtest schema:
 
@@ -434,21 +436,21 @@ Unlike git submodules, subtrees copy upstream code directly into this repo — t
 
 ## Roadmap
 
-- [ ] live paper trading mode
+- [ ] live paper trading mode *** lowest priority currently
 - [x] multi-market support within strategies
 - [x] better position sizing capabilities
 - [x] fee modeling [PR#4](https://github.com/ben-gramling/nautilus_pm/pull/4)
-- [ ] total slippage modeling *** [PR#6](https://github.com/ben-gramling/nautilus_pm/pull/6), [PR#9](https://github.com/evan-kolberg/prediction-market-backtesting/pull/9)
+- [ ] total slippage modeling *** PMXT L2 data is good for taker modeling, but we can't model maker w/o L3 [PR#6](https://github.com/ben-gramling/nautilus_pm/pull/6), [PR#9](https://github.com/evan-kolberg/prediction-market-backtesting/pull/9)
 - [x] polymarket L2 order book backtests [PR#10](https://github.com/evan-kolberg/prediction-market-backtesting/pull/10)
-- [x] public relay on a VPS for pre-crunching book data from PMXT -- massively speeds up backtests [PR#17](https://github.com/evan-kolberg/prediction-market-backtesting/pull/17)
-- [ ] kalshi L2 order book backtests
+- [x] public relay on a VPS for pre-crunching book data from PMXT -- massively speeds up backtests [PR#17](https://github.com/evan-kolberg/prediction-market-backtesting/pull/17), [PR#18](https://github.com/evan-kolberg/prediction-market-backtesting/pull/18), [PR#19](https://github.com/evan-kolberg/prediction-market-backtesting/pull/19), [PR#20](https://github.com/evan-kolberg/prediction-market-backtesting/pull/20)
+- [ ] kalshi L2 order book backtests **** we don't have this data yet
 - [x] much better & informative charting [PR#5](https://github.com/ben-gramling/nautilus_pm/pull/5)
 
 
 ## Known Issues
 
 - [ ] Poly/Kalshi APIs rate-limit a lot. Kalshi seems worse. (for trade tick config)
-- [ ] PMXT relay misses or raw-fallback PMXT L2 loads can still take a long time
+- [x] PMXT relay misses or raw-fallback PMXT L2 loads can still take a long time -- though, with the VPS, this should hopefully be solved
 - [ ] multi-market runs do not yet share a universal raw per-hour cache, and optional local filtered-disk-cache growth is currently unbounded
 
 ## License
