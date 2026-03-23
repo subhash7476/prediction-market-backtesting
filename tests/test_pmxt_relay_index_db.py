@@ -350,3 +350,154 @@ def test_mark_prebuilt_without_artifacts_does_not_touch_filtered_hours(tmp_path:
     # But archive_hours should still show ready
     stats = index.stats()
     assert stats["processed_hours"] == 1
+
+
+def test_event_pruning_respects_retention_limit(tmp_path: Path):
+    index = RelayIndex(tmp_path / "relay.sqlite3", event_retention=5)
+    index.initialize()
+
+    for i in range(10):
+        index.log_event(level="INFO", event_type=f"evt_{i}", message=f"message {i}")
+
+    events = index.recent_events(limit=100)
+    assert len(events) == 5
+    # Most recent events survive
+    assert events[0]["event_type"] == "evt_9"
+    assert events[-1]["event_type"] == "evt_5"
+
+
+def test_mark_sharded_resets_error_count(tmp_path: Path):
+    index = RelayIndex(tmp_path / "relay.sqlite3")
+    index.initialize()
+    filename = "polymarket_orderbook_2026-03-21T12.parquet"
+    index.upsert_discovered_hour(filename, "https://r2.pmxt.dev/" + filename, 1)
+    index.mark_mirrored(
+        filename,
+        local_path="/tmp/a",
+        etag=None,
+        content_length=None,
+        last_modified=None,
+    )
+
+    # Accumulate process errors
+    index.mark_process_error(filename, "err1")
+    index.mark_process_error(filename, "err2")
+    assert len(index.list_hours_needing_process()) == 1
+
+    # mark_sharded resets error_count so the file is eligible for prebuild
+    index.mark_sharded(filename)
+    queue = index.queue_summary()
+    assert queue["process_error"] == 0
+
+
+def test_list_filtered_hours_with_hour_range(tmp_path: Path):
+    index = RelayIndex(tmp_path / "relay.sqlite3")
+    index.initialize()
+
+    condition_id = "0x" + "ab" * 32
+    token_id = "123"
+    for hour_str in ["T10", "T12", "T14", "T16"]:
+        filename = f"polymarket_orderbook_2026-03-21{hour_str}.parquet"
+        index.upsert_discovered_hour(filename, "https://r2.pmxt.dev/" + filename, 1)
+        index.mark_mirrored(
+            filename,
+            local_path="/tmp/a",
+            etag=None,
+            content_length=None,
+            last_modified=None,
+        )
+        index.mark_sharded(filename)
+        artifacts = [
+            FilteredHourArtifact(
+                filename=filename,
+                hour=f"2026-03-21{hour_str}:00:00+00:00",
+                condition_id=condition_id,
+                token_id=token_id,
+                local_path=f"/srv/filtered/{condition_id}/{token_id}/{filename}",
+                row_count=100,
+                byte_size=5000,
+            ),
+        ]
+        index.mark_prebuilt(filename, filtered_artifact_count=1, artifacts=artifacts)
+
+    # All hours
+    all_hours = index.list_filtered_hours(condition_id, token_id)
+    assert len(all_hours) == 4
+
+    # Range filter
+    ranged = index.list_filtered_hours(
+        condition_id,
+        token_id,
+        start_hour="2026-03-21T12:00:00+00:00",
+        end_hour="2026-03-21T14:00:00+00:00",
+    )
+    assert len(ranged) == 2
+
+    # Non-existent market returns empty
+    empty = index.list_filtered_hours("0xdeadbeef", "999")
+    assert len(empty) == 0
+
+
+def test_replace_filtered_hours_sets_all_statuses_ready(tmp_path: Path):
+    index = RelayIndex(tmp_path / "relay.sqlite3")
+    index.initialize()
+    filename = "polymarket_orderbook_2026-03-21T12.parquet"
+    index.upsert_discovered_hour(filename, "https://r2.pmxt.dev/" + filename, 1)
+
+    artifacts = [
+        FilteredHourArtifact(
+            filename=filename,
+            hour="2026-03-21T12:00:00+00:00",
+            condition_id="0x" + "ab" * 32,
+            token_id="123",
+            local_path="/srv/filtered/0xab/123/" + filename,
+            row_count=100,
+            byte_size=5000,
+        ),
+    ]
+    index.replace_filtered_hours(filename, artifacts)
+
+    queue = index.queue_summary()
+    assert queue["process_error"] == 0
+    assert queue["prebuild_error"] == 0
+    rows = index.list_filtered_for_filename(filename)
+    assert len(rows) == 1
+    stats = index.stats()
+    assert stats["processed_hours"] == 1
+
+
+def test_get_filtered_hour_returns_single_row(tmp_path: Path):
+    index = RelayIndex(tmp_path / "relay.sqlite3")
+    index.initialize()
+    filename = "polymarket_orderbook_2026-03-21T12.parquet"
+    condition_id = "0x" + "ab" * 32
+    token_id = "123"
+    index.upsert_discovered_hour(filename, "https://r2.pmxt.dev/" + filename, 1)
+    index.mark_mirrored(
+        filename,
+        local_path="/tmp/a",
+        etag=None,
+        content_length=None,
+        last_modified=None,
+    )
+    index.mark_sharded(filename)
+    artifacts = [
+        FilteredHourArtifact(
+            filename=filename,
+            hour="2026-03-21T12:00:00+00:00",
+            condition_id=condition_id,
+            token_id=token_id,
+            local_path="/srv/filtered/test/" + filename,
+            row_count=50,
+            byte_size=2500,
+        ),
+    ]
+    index.mark_prebuilt(filename, filtered_artifact_count=1, artifacts=artifacts)
+
+    row = index.get_filtered_hour(condition_id, token_id, filename)
+    assert row is not None
+    assert row["row_count"] == 50
+    assert row["byte_size"] == 2500
+
+    # Non-existent returns None
+    assert index.get_filtered_hour("0xdead", "999", filename) is None

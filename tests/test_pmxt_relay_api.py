@@ -69,6 +69,43 @@ def test_rate_limiter_enforces_sliding_window():
     assert limiter.bucket_size("203.0.113.1", now=61.0) == 2
 
 
+def test_rate_limiter_evicts_stale_buckets_above_threshold():
+    limiter = RequestRateLimiter(requests_per_minute=100)
+
+    # Fill 10001 client buckets so the eviction triggers
+    for i in range(10001):
+        limiter.allow(f"client_{i}", now=0.0)
+
+    # All buckets still exist because they have entries
+    assert len(limiter._requests) == 10001
+
+    # Expire all entries by advancing past the 60s window
+    # Then trigger one more allow to cause eviction
+    limiter.allow("trigger_client", now=120.0)
+    # The trigger_client allow will clean expired entries from trigger_client's bucket
+    # But the eviction only removes EMPTY buckets after the append
+    # Each old bucket still has its entry (expired but not yet cleaned)
+    # bucket_size accesses clean them lazily, but the eviction in allow()
+    # checks `not v` which is False for non-empty deques even with expired entries
+
+    # Now call allow for a client whose bucket will be emptied during the window check
+    # and then one more new client to trigger eviction again
+    for i in range(10001):
+        # Access each old client to drain expired entries
+        limiter.bucket_size(f"client_{i}", now=120.0)
+
+    # Now the old buckets are empty deques - next allow triggers eviction
+    limiter.allow("final_trigger", now=120.0)
+    # Stale (empty) buckets should be evicted
+    assert len(limiter._requests) < 10001
+
+
+def test_rate_limiter_disabled_when_zero():
+    limiter = RequestRateLimiter(requests_per_minute=0)
+    for _ in range(1000):
+        assert limiter.allow("flood", now=0.0) is True
+
+
 def test_filtered_path_resolution_blocks_traversal(tmp_path: Path):
     config = _make_config(tmp_path)
 
