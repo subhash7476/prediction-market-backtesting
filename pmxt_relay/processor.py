@@ -46,7 +46,7 @@ PROCESSED_SCHEMA = pa.schema(
 )
 RELEVANT_UPDATE_TYPES = pa.array(["book_snapshot", "price_change"])
 PARQUET_BATCH_SIZE = 65536
-PREBUILD_BATCH_SIZE = 524288
+PREBUILD_BATCH_SIZE = 65536
 
 
 @dataclass(frozen=True)
