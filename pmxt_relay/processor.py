@@ -47,7 +47,7 @@ PROCESSED_SCHEMA = pa.schema(
 )
 RELEVANT_UPDATE_TYPES = pa.array(["book_snapshot", "price_change"])
 PARQUET_BATCH_SIZE = 65536
-PREBUILD_BATCH_SIZE = 65536
+PREBUILD_BATCH_SIZE = 2000
 
 
 @dataclass(frozen=True)
@@ -259,9 +259,7 @@ class RelayHourProcessor:
             con.execute(f"SET memory_limit = '{self._config.duckdb_memory_limit}'")
             con.execute(f"SET temp_directory = '{temp_root}'")
 
-            # Get unique keys first (lightweight metadata scan).
-            # parquet_scan() and COPY TO don't accept ? placeholders,
-            # so we interpolate the trusted local path as a literal.
+            # Get unique keys (lightweight metadata scan).
             keys = con.execute(
                 "SELECT DISTINCT market_id, token_id "
                 f"FROM parquet_scan('{processed_path_str}') "
@@ -272,44 +270,86 @@ class RelayHourProcessor:
             if progress_callback is not None:
                 progress_callback(0, total_keys)
 
-            # For each key, filter and write one output file.
-            # DuckDB uses predicate pushdown on parquet row groups so only
-            # matching data is read per query — memory stays bounded.
-            for idx, (condition_id, token_id) in enumerate(keys):
-                output_path = filtered_root / filtered_relative_path(
-                    condition_id, token_id, filename
-                )
-                output_path.parent.mkdir(parents=True, exist_ok=True)
-                tmp_path = output_path.with_name(f"{output_path.name}.tmp")
-                try:
-                    con.execute(
-                        "COPY ("
-                        "SELECT update_type, data "
-                        f"FROM parquet_scan('{processed_path_str}') "
-                        "WHERE market_id = ? AND token_id = ?"
-                        f") TO '{tmp_path}' (FORMAT PARQUET, COMPRESSION ZSTD)",
-                        [condition_id, token_id],
-                    )
-                    os.replace(tmp_path, output_path)
-                except Exception:
-                    tmp_path.unlink(missing_ok=True)
-                    raise
+            # Process in batches to balance memory vs speed.
+            # Each batch uses COPY PARTITION_BY with a bounded number of
+            # open output buffers (PREBUILD_BATCH_SIZE keys per batch).
+            done = 0
+            for batch_start in range(0, total_keys, PREBUILD_BATCH_SIZE):
+                batch_keys = keys[batch_start : batch_start + PREBUILD_BATCH_SIZE]
+                batch_out = temp_root / f"batch_{batch_start}"
+                batch_out.mkdir(parents=True, exist_ok=True)
 
-                stat = output_path.stat()
-                row_count = pq.ParquetFile(output_path).metadata.num_rows
-                artifacts.append(
-                    FilteredHourArtifact(
-                        filename=filename,
-                        hour=hour,
-                        condition_id=condition_id,
-                        token_id=token_id,
-                        local_path=str(output_path),
-                        row_count=row_count,
-                        byte_size=stat.st_size,
-                    )
+                # Build a WHERE IN filter for this batch of keys.
+                # Create a temp table with the batch keys for efficient join.
+                con.execute(
+                    "CREATE OR REPLACE TEMP TABLE batch_keys "
+                    "(market_id VARCHAR, token_id VARCHAR)"
                 )
-                if progress_callback is not None and (idx + 1) % 500 == 0:
-                    progress_callback(idx + 1, total_keys)
+                con.executemany("INSERT INTO batch_keys VALUES (?, ?)", batch_keys)
+
+                con.execute(
+                    f"""
+                    COPY (
+                        SELECT s.market_id, s.token_id, s.update_type, s.data
+                        FROM parquet_scan('{processed_path_str}') s
+                        SEMI JOIN batch_keys b
+                        ON s.market_id = b.market_id AND s.token_id = b.token_id
+                    )
+                    TO '{batch_out}'
+                    (FORMAT PARQUET, PARTITION_BY (market_id, token_id),
+                     COMPRESSION ZSTD, OVERWRITE_OR_IGNORE)
+                    """
+                )
+
+                # Walk the batch output and move files to final paths.
+                for market_dir in sorted(batch_out.iterdir()):
+                    if not market_dir.is_dir():
+                        continue
+                    condition_id = market_dir.name.split("=", 1)[1]
+                    for token_dir in sorted(market_dir.iterdir()):
+                        if not token_dir.is_dir():
+                            continue
+                        token_id = token_dir.name.split("=", 1)[1]
+                        src_files = sorted(token_dir.glob("*.parquet"))
+                        if not src_files:
+                            continue
+                        output_path = filtered_root / filtered_relative_path(
+                            condition_id, token_id, filename
+                        )
+                        output_path.parent.mkdir(parents=True, exist_ok=True)
+                        if len(src_files) == 1:
+                            os.replace(src_files[0], output_path)
+                        else:
+                            table = ds.dataset(src_files, format="parquet").to_table(
+                                columns=["update_type", "data"]
+                            )
+                            tmp_out = output_path.with_name(f"{output_path.name}.tmp")
+                            try:
+                                pq.write_table(table, tmp_out, compression="zstd")
+                                os.replace(tmp_out, output_path)
+                            finally:
+                                tmp_out.unlink(missing_ok=True)
+
+                        stat = output_path.stat()
+                        row_count = pq.ParquetFile(output_path).metadata.num_rows
+                        artifacts.append(
+                            FilteredHourArtifact(
+                                filename=filename,
+                                hour=hour,
+                                condition_id=condition_id,
+                                token_id=token_id,
+                                local_path=str(output_path),
+                                row_count=row_count,
+                                byte_size=stat.st_size,
+                            )
+                        )
+                        done += 1
+
+                # Clean up batch temp dir to free disk space.
+                shutil.rmtree(batch_out, ignore_errors=True)
+
+                if progress_callback is not None:
+                    progress_callback(done, total_keys)
 
             con.close()
             if progress_callback is not None:
