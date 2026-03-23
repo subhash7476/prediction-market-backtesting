@@ -237,74 +237,54 @@ class RelayHourProcessor:
         progress_callback: Callable[[int, int], None] | None = None,
     ) -> list[FilteredHourArtifact]:
         hour = parse_archive_hour(filename).isoformat()
-        filtered_root = self._config.filtered_root
+        temp_root = self._config.tmp_root / f"{filename}.prebuild.filtered"
+        partition_root = temp_root / "partitions"
+        shutil.rmtree(temp_root, ignore_errors=True)
+        partition_root.mkdir(parents=True, exist_ok=True)
 
-        # Phase 1: Read the full table and get unique (market_id, token_id)
-        # keys.  The table stays in memory (~2-3 GB) while we iterate groups
-        # one at a time – much cheaper than materialising all groups at once.
-        table = pq.read_table(
-            processed_path,
-            columns=["market_id", "token_id", "update_type", "data"],
-        )
-        total_rows = table.num_rows
-        if progress_callback is not None:
-            progress_callback(total_rows, total_rows)
+        total_rows = pq.ParquetFile(processed_path).metadata.num_rows
+        row_offset = 0
+        partition_counter = 0
 
-        keys_table = (
-            table.select(["market_id", "token_id"])
-            .group_by(["market_id", "token_id"])
-            .aggregate([])
-        )
-        unique_keys: list[tuple[str, str]] = list(
-            zip(
-                keys_table.column("market_id").to_pylist(),
-                keys_table.column("token_id").to_pylist(),
-                strict=True,
-            )
-        )
-        del keys_table
+        try:
+            dataset = ds.dataset(processed_path, format="parquet")
+            for batch in dataset.to_batches(
+                columns=["market_id", "token_id", "update_type", "data"],
+                batch_size=PARQUET_BATCH_SIZE,
+                use_threads=True,
+            ):
+                if batch.num_rows == 0:
+                    continue
+                row_indices = pa.array(
+                    range(row_offset, row_offset + batch.num_rows),
+                    type=pa.int64(),
+                )
+                row_offset += batch.num_rows
+                partition_batch = pa.record_batch(
+                    [
+                        batch.column("market_id"),
+                        batch.column("token_id"),
+                        row_indices,
+                        batch.column("update_type"),
+                        batch.column("data"),
+                    ],
+                    schema=PARTITION_SCHEMA,
+                )
+                self._write_partition_batch(
+                    partition_batch,
+                    partition_root,
+                    basename_template=f"part-{partition_counter}-{{i}}.parquet",
+                )
+                partition_counter += 1
+                if progress_callback is not None:
+                    progress_callback(row_offset, total_rows)
+            del dataset
 
-        market_col = table.column("market_id")
-        token_col = table.column("token_id")
-
-        # Phase 2: For each unique key, filter → write final output directly.
-        # Only one group's filtered data is materialised at a time.
-        def write_key(key: tuple[str, str]) -> FilteredHourArtifact:
-            condition_id, token_id = key
-            mask = pc.and_(
-                pc.equal(market_col, condition_id),
-                pc.equal(token_col, token_id),
-            )
-            group = table.filter(mask).select(["update_type", "data"])
-            output_path = filtered_root / filtered_relative_path(
-                condition_id, token_id, filename
-            )
-            output_path.parent.mkdir(parents=True, exist_ok=True)
-            tmp_path = output_path.with_name(f"{output_path.name}.tmp")
-            try:
-                pq.write_table(group, tmp_path, compression="zstd")
-                os.replace(tmp_path, output_path)
-            finally:
-                tmp_path.unlink(missing_ok=True)
-            row_count = group.num_rows
-            byte_size = output_path.stat().st_size
-            del group
-            return FilteredHourArtifact(
-                filename=filename,
-                hour=hour,
-                condition_id=condition_id,
-                token_id=token_id,
-                local_path=str(output_path),
-                row_count=row_count,
-                byte_size=byte_size,
-            )
-
-        # Sequential – each key's filter is a fast columnar scan over the
-        # in-memory table; parallelising the writes would just add memory
-        # pressure and disk contention on a small VPS.
-        artifacts = [write_key(k) for k in unique_keys]
-        del table
-        return artifacts
+            if progress_callback is not None:
+                progress_callback(total_rows, total_rows)
+            return self._materialize_partition_tree(filename, hour, partition_root)
+        finally:
+            shutil.rmtree(temp_root, ignore_errors=True)
 
     def _iter_filtered_batches(self, parquet_file: pq.ParquetFile):  # type: ignore[no-untyped-def]
         row_offset = 0
