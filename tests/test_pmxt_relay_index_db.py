@@ -235,20 +235,19 @@ def test_mark_prebuilt_tracks_filtered_artifact_count(tmp_path: Path):
     assert index.list_hours_needing_filtered_prebuild() == []
 
 
-def test_error_count_exhausts_retries_after_three_failures(tmp_path: Path):
+def test_error_count_deprioritizes_but_never_abandons(tmp_path: Path):
     index = RelayIndex(tmp_path / "relay.sqlite3")
     index.initialize()
     filename = "polymarket_orderbook_2026-03-21T12.parquet"
     index.upsert_discovered_hour(filename, "https://r2.pmxt.dev/" + filename, 1)
 
-    # Mirror errors: first 2 retries still appear in the queue
+    # Mirror errors: hour stays in queue no matter how many errors
     index.mark_mirror_error(filename, "timeout 1")
     assert len(index.list_hours_needing_mirror()) == 1
     index.mark_mirror_error(filename, "timeout 2")
     assert len(index.list_hours_needing_mirror()) == 1
-    # Third error exhausts retries
     index.mark_mirror_error(filename, "timeout 3")
-    assert len(index.list_hours_needing_mirror()) == 0
+    assert len(index.list_hours_needing_mirror()) == 1  # still queued
 
     # Success resets error_count
     index.mark_mirrored(
@@ -262,15 +261,32 @@ def test_error_count_exhausts_retries_after_three_failures(tmp_path: Path):
     assert len(index.list_hours_needing_process()) == 1
     index.mark_process_error(filename, "corrupt 2")
     index.mark_process_error(filename, "corrupt 3")
-    assert len(index.list_hours_needing_process()) == 0
+    assert len(index.list_hours_needing_process()) == 1  # still queued
 
-    # Prebuild errors
+    # Prebuild errors — never abandoned
     index.mark_sharded(filename)  # resets error_count
     index.mark_prebuild_error(filename, "oom 1")
     assert len(index.list_hours_needing_filtered_prebuild()) == 1
     index.mark_prebuild_error(filename, "oom 2")
     index.mark_prebuild_error(filename, "oom 3")
-    assert len(index.list_hours_needing_filtered_prebuild()) == 0
+    assert len(index.list_hours_needing_filtered_prebuild()) == 1  # still queued
+
+    # Errored hours sort to the back (deprioritized, not abandoned)
+    filename2 = "polymarket_orderbook_2026-03-21T13.parquet"
+    index.upsert_discovered_hour(filename2, "https://r2.pmxt.dev/" + filename2, 1)
+    index.mark_mirrored(
+        filename2,
+        local_path="/tmp/b",
+        etag=None,
+        content_length=None,
+        last_modified=None,
+    )
+    index.mark_sharded(filename2)
+    hours = index.list_hours_needing_filtered_prebuild()
+    assert len(hours) == 2
+    # Clean hour comes first (error_count=0), errored hour comes last
+    assert hours[0]["filename"] == filename2
+    assert hours[1]["filename"] == filename
 
 
 def test_mark_prebuilt_registers_artifacts_in_filtered_hours(tmp_path: Path):

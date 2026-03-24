@@ -260,8 +260,7 @@ class RelayIndex:
             SELECT *
             FROM archive_hours
             WHERE mirror_status IN ('pending', 'error')
-              AND error_count < 3
-            ORDER BY hour
+            ORDER BY error_count ASC, hour
             """
         )
         return cursor.fetchall()
@@ -341,8 +340,7 @@ class RelayIndex:
             SELECT *
             FROM archive_hours
             WHERE mirror_status = 'ready' AND process_status IN ({placeholders})
-              AND error_count < 3
-            ORDER BY hour
+            ORDER BY error_count ASC, hour
             """,
             statuses,
         )
@@ -521,9 +519,8 @@ class RelayIndex:
             WHERE mirror_status = 'ready'
               AND process_status = 'ready'
               AND prebuild_status IN ('pending', 'error')
-              AND error_count < 3
               AND local_path IS NOT NULL
-            ORDER BY hour DESC
+            ORDER BY error_count ASC, hour DESC
             """
         )
         return cursor.fetchall()
