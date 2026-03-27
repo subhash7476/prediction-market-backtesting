@@ -35,9 +35,7 @@ Data sources:
 
 import asyncio
 import os
-import sys
 from decimal import Decimal
-from pathlib import Path
 
 import pandas as pd
 
@@ -66,14 +64,11 @@ from nautilus_trader.model.objects import Money
 
 
 try:
-    from _defaults import DEFAULT_INITIAL_CASH
-    from _defaults import DEFAULT_POLYMARKET_MARKET_SLUG
-except ModuleNotFoundError:
-    _THIS_DIR = Path(__file__).resolve().parent
-    if str(_THIS_DIR) not in sys.path:
-        sys.path.insert(0, str(_THIS_DIR))
-    from _defaults import DEFAULT_INITIAL_CASH
-    from _defaults import DEFAULT_POLYMARKET_MARKET_SLUG
+    from ._defaults import DEFAULT_INITIAL_CASH
+    from ._defaults import DEFAULT_POLYMARKET_MARKET_SLUG
+except ImportError:
+    from backtests.polymarket_trade_tick._defaults import DEFAULT_INITIAL_CASH
+    from backtests.polymarket_trade_tick._defaults import DEFAULT_POLYMARKET_MARKET_SLUG
 
 
 # Market slug to fetch data for

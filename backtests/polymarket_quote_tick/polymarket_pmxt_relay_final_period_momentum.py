@@ -13,29 +13,29 @@ from __future__ import annotations
 
 import asyncio
 import os
-import sys
 from decimal import Decimal
-from pathlib import Path
 
-_REPO_ROOT = Path(__file__).resolve().parent.parent
-if str(_REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(_REPO_ROOT))
+try:
+    from ._script_helpers import ensure_repo_root
+except ImportError:
+    from _script_helpers import ensure_repo_root
+
+ensure_repo_root(__file__)
 
 from strategies import QuoteTickFinalPeriodMomentumConfig
 from strategies import QuoteTickFinalPeriodMomentumStrategy
 
 
 try:
-    from _defaults import DEFAULT_INITIAL_CASH
-    from _defaults import DEFAULT_POLYMARKET_MARKET_SLUG
-    from _polymarket_single_market_pmxt_runner import run_single_market_pmxt_backtest
-except ModuleNotFoundError:
-    _THIS_DIR = Path(__file__).resolve().parent
-    if str(_THIS_DIR) not in sys.path:
-        sys.path.insert(0, str(_THIS_DIR))
-    from _defaults import DEFAULT_INITIAL_CASH
-    from _defaults import DEFAULT_POLYMARKET_MARKET_SLUG
-    from _polymarket_single_market_pmxt_runner import run_single_market_pmxt_backtest
+    from ._defaults import DEFAULT_INITIAL_CASH
+    from ._defaults import DEFAULT_POLYMARKET_MARKET_SLUG
+    from ._polymarket_single_market_pmxt_runner import run_single_market_pmxt_backtest
+except ImportError:
+    from backtests.polymarket_quote_tick._defaults import DEFAULT_INITIAL_CASH
+    from backtests.polymarket_quote_tick._defaults import DEFAULT_POLYMARKET_MARKET_SLUG
+    from backtests.polymarket_quote_tick._polymarket_single_market_pmxt_runner import (
+        run_single_market_pmxt_backtest,
+    )
 
 
 NAME = "polymarket_pmxt_relay_final_period_momentum"

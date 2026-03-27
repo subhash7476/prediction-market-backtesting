@@ -172,12 +172,12 @@ BACKTEST_ENABLE_TIMING=0 make backtest
 Or:
 
 ```bash
-uv run python backtests/_timing_test.py backtests/polymarket_pmxt_relay_ema_crossover.py
+uv run python backtests/_shared/_timing_test.py backtests/polymarket_quote_tick/polymarket_pmxt_relay_ema_crossover.py
 ```
 
 Environment variables control the market and window:
 
 ```bash
 MARKET_SLUG=some-market LOOKBACK_HOURS=80 END_TIME=2026-03-24T04:00:00Z \
-    uv run python backtests/_timing_test.py backtests/polymarket_pmxt_relay_breakout.py
+    uv run python backtests/_shared/_timing_test.py backtests/polymarket_quote_tick/polymarket_pmxt_relay_breakout.py
 ```

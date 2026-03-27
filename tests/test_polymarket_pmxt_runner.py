@@ -1,7 +1,9 @@
 import asyncio
 from types import SimpleNamespace
 
-from backtests import _polymarket_single_market_pmxt_runner as pmxt_runner
+from backtests.polymarket_quote_tick import (
+    _polymarket_single_market_pmxt_runner as pmxt_runner,
+)
 
 
 class _QuoteStub:

@@ -13,29 +13,29 @@ from __future__ import annotations
 
 import asyncio
 import os
-import sys
 from decimal import Decimal
-from pathlib import Path
 
-_REPO_ROOT = Path(__file__).resolve().parent.parent
-if str(_REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(_REPO_ROOT))
+try:
+    from ._script_helpers import ensure_repo_root
+except ImportError:
+    from _script_helpers import ensure_repo_root
+
+ensure_repo_root(__file__)
 
 from strategies import QuoteTickVWAPReversionConfig
 from strategies import QuoteTickVWAPReversionStrategy
 
 
 try:
-    from _defaults import DEFAULT_INITIAL_CASH
-    from _defaults import DEFAULT_POLYMARKET_MARKET_SLUG
-    from _polymarket_single_market_pmxt_runner import run_single_market_pmxt_backtest
-except ModuleNotFoundError:
-    _THIS_DIR = Path(__file__).resolve().parent
-    if str(_THIS_DIR) not in sys.path:
-        sys.path.insert(0, str(_THIS_DIR))
-    from _defaults import DEFAULT_INITIAL_CASH
-    from _defaults import DEFAULT_POLYMARKET_MARKET_SLUG
-    from _polymarket_single_market_pmxt_runner import run_single_market_pmxt_backtest
+    from ._defaults import DEFAULT_INITIAL_CASH
+    from ._defaults import DEFAULT_POLYMARKET_MARKET_SLUG
+    from ._polymarket_single_market_pmxt_runner import run_single_market_pmxt_backtest
+except ImportError:
+    from backtests.polymarket_quote_tick._defaults import DEFAULT_INITIAL_CASH
+    from backtests.polymarket_quote_tick._defaults import DEFAULT_POLYMARKET_MARKET_SLUG
+    from backtests.polymarket_quote_tick._polymarket_single_market_pmxt_runner import (
+        run_single_market_pmxt_backtest,
+    )
 
 
 NAME = "polymarket_pmxt_relay_vwap_reversion"
@@ -47,7 +47,7 @@ MARKET_SLUG = os.getenv(
     "MARKET_SLUG",
     DEFAULT_POLYMARKET_MARKET_SLUG,
 )
-LOOKBACK_HOURS = float(os.getenv("LOOKBACK_HOURS", "24"))
+LOOKBACK_HOURS = float(os.getenv("LOOKBACK_HOURS", "250"))
 TOKEN_INDEX = int(os.getenv("TOKEN_INDEX", "0"))
 MIN_QUOTES = int(os.getenv("MIN_QUOTES", "500"))
 MIN_PRICE_RANGE = float(os.getenv("MIN_PRICE_RANGE", "0.005"))

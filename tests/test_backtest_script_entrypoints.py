@@ -14,6 +14,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
     "relative_path",
     [
         Path("backtests/kalshi_trade_tick/kalshi_breakout.py"),
+        Path("backtests/polymarket_quote_tick/polymarket_pmxt_relay_ema_crossover.py"),
         Path("backtests/polymarket_trade_tick/polymarket_simple_quoter.py"),
         Path("backtests/polymarket_trade_tick/polymarket_vwap_reversion.py"),
     ],

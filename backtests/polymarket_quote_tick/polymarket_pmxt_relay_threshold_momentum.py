@@ -4,7 +4,7 @@
 # See the repository NOTICE file for provenance and licensing scope.
 
 """
-Late-favorite limit hold on one Polymarket market using PMXT historical L2 data.
+Threshold momentum on one Polymarket market using PMXT historical L2 data.
 """
 
 # ruff: noqa: E402
@@ -13,34 +13,34 @@ from __future__ import annotations
 
 import asyncio
 import os
-import sys
 from decimal import Decimal
-from pathlib import Path
 
-_REPO_ROOT = Path(__file__).resolve().parent.parent
-if str(_REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(_REPO_ROOT))
+try:
+    from ._script_helpers import ensure_repo_root
+except ImportError:
+    from _script_helpers import ensure_repo_root
 
-from strategies import QuoteTickLateFavoriteLimitHoldConfig
-from strategies import QuoteTickLateFavoriteLimitHoldStrategy
+ensure_repo_root(__file__)
+
+from strategies import QuoteTickThresholdMomentumConfig
+from strategies import QuoteTickThresholdMomentumStrategy
 
 
 try:
-    from _defaults import DEFAULT_INITIAL_CASH
-    from _defaults import DEFAULT_POLYMARKET_MARKET_SLUG
-    from _polymarket_single_market_pmxt_runner import run_single_market_pmxt_backtest
-except ModuleNotFoundError:
-    _THIS_DIR = Path(__file__).resolve().parent
-    if str(_THIS_DIR) not in sys.path:
-        sys.path.insert(0, str(_THIS_DIR))
-    from _defaults import DEFAULT_INITIAL_CASH
-    from _defaults import DEFAULT_POLYMARKET_MARKET_SLUG
-    from _polymarket_single_market_pmxt_runner import run_single_market_pmxt_backtest
+    from ._defaults import DEFAULT_INITIAL_CASH
+    from ._defaults import DEFAULT_POLYMARKET_MARKET_SLUG
+    from ._polymarket_single_market_pmxt_runner import run_single_market_pmxt_backtest
+except ImportError:
+    from backtests.polymarket_quote_tick._defaults import DEFAULT_INITIAL_CASH
+    from backtests.polymarket_quote_tick._defaults import DEFAULT_POLYMARKET_MARKET_SLUG
+    from backtests.polymarket_quote_tick._polymarket_single_market_pmxt_runner import (
+        run_single_market_pmxt_backtest,
+    )
 
 
-NAME = "polymarket_pmxt_relay_late_favorite_limit_hold"
+NAME = "polymarket_pmxt_relay_threshold_momentum"
 DESCRIPTION = (
-    "Late-favorite limit entry on a single Polymarket market using PMXT L2 data"
+    "Threshold breakout momentum on a single Polymarket market using PMXT L2 data"
 )
 
 MARKET_SLUG = os.getenv(
@@ -55,9 +55,11 @@ END_TIME = os.getenv("END_TIME")
 
 ACTIVATION_START_TIME_NS = int(os.getenv("ACTIVATION_START_TIME_NS", "0"))
 MARKET_CLOSE_TIME_NS = int(os.getenv("MARKET_CLOSE_TIME_NS", "0"))
-ENTRY_PRICE = float(os.getenv("ENTRY_PRICE", "0.90"))
+ENTRY_PRICE = float(os.getenv("ENTRY_PRICE", "0.80"))
+TAKE_PROFIT_PRICE = float(os.getenv("TAKE_PROFIT_PRICE", "0.92"))
+STOP_LOSS_PRICE = float(os.getenv("STOP_LOSS_PRICE", "0.50"))
 
-TRADE_SIZE = Decimal(os.getenv("TRADE_SIZE", "25"))
+TRADE_SIZE = Decimal(os.getenv("TRADE_SIZE", "100"))
 INITIAL_CASH = float(os.getenv("INITIAL_CASH", str(DEFAULT_INITIAL_CASH)))
 
 
@@ -72,13 +74,15 @@ async def run() -> None:
         initial_cash=INITIAL_CASH,
         probability_window=10,
         end_time=None if not END_TIME else END_TIME,
-        strategy_factory=lambda instrument_id: QuoteTickLateFavoriteLimitHoldStrategy(
-            config=QuoteTickLateFavoriteLimitHoldConfig(
+        strategy_factory=lambda instrument_id: QuoteTickThresholdMomentumStrategy(
+            config=QuoteTickThresholdMomentumConfig(
                 instrument_id=instrument_id,
                 trade_size=TRADE_SIZE,
                 activation_start_time_ns=ACTIVATION_START_TIME_NS,
                 market_close_time_ns=MARKET_CLOSE_TIME_NS,
                 entry_price=ENTRY_PRICE,
+                take_profit_price=TAKE_PROFIT_PRICE,
+                stop_loss_price=STOP_LOSS_PRICE,
             ),
         ),
     )

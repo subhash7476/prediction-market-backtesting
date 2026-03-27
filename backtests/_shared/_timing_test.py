@@ -1,10 +1,10 @@
 """Timing harness — measures per-hour fetch time, source, and overall progress.
 
 Can be used standalone:
-    uv run python backtests/_timing_test.py <backtest_file>
+    uv run python backtests/_shared/_timing_test.py <backtest_file>
 
 Or imported and activated before running any backtest:
-    from backtests._timing_test import install_timing
+    from backtests._shared._timing_test import install_timing
     install_timing()
 """
 
@@ -17,7 +17,7 @@ import threading
 import time
 from pathlib import Path
 
-_REPO_ROOT = Path(__file__).resolve().parent.parent
+_REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
@@ -121,7 +121,7 @@ def _load_backtest_module(path_str: str):
 if __name__ == "__main__":
     if len(sys.argv) < 2:
         print(
-            "Usage: uv run python backtests/_timing_test.py <backtest_file>",
+            "Usage: uv run python backtests/_shared/_timing_test.py <backtest_file>",
             file=sys.stderr,
         )
         sys.exit(1)

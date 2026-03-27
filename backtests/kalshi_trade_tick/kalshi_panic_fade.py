@@ -16,9 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import os
-import sys
 from decimal import Decimal
-from pathlib import Path
 
 try:
     from ._script_helpers import ensure_repo_root
@@ -32,18 +30,17 @@ from strategies import TradeTickPanicFadeStrategy
 
 
 try:
-    from _defaults import DEFAULT_INITIAL_CASH
-    from _defaults import DEFAULT_KALSHI_MARKET_TICKER
-    from _defaults import DEFAULT_LOOKBACK_DAYS
-    from _kalshi_single_market_trade_runner import run_single_market_trade_backtest
-except ModuleNotFoundError:
-    _THIS_DIR = Path(__file__).resolve().parent
-    if str(_THIS_DIR) not in sys.path:
-        sys.path.insert(0, str(_THIS_DIR))
-    from _defaults import DEFAULT_INITIAL_CASH
-    from _defaults import DEFAULT_KALSHI_MARKET_TICKER
-    from _defaults import DEFAULT_LOOKBACK_DAYS
-    from _kalshi_single_market_trade_runner import run_single_market_trade_backtest
+    from ._defaults import DEFAULT_INITIAL_CASH
+    from ._defaults import DEFAULT_KALSHI_MARKET_TICKER
+    from ._defaults import DEFAULT_LOOKBACK_DAYS
+    from ._kalshi_single_market_trade_runner import run_single_market_trade_backtest
+except ImportError:
+    from backtests.kalshi_trade_tick._defaults import DEFAULT_INITIAL_CASH
+    from backtests.kalshi_trade_tick._defaults import DEFAULT_KALSHI_MARKET_TICKER
+    from backtests.kalshi_trade_tick._defaults import DEFAULT_LOOKBACK_DAYS
+    from backtests.kalshi_trade_tick._kalshi_single_market_trade_runner import (
+        run_single_market_trade_backtest,
+    )
 
 
 NAME = "kalshi_panic_fade"

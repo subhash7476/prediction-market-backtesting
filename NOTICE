@@ -23,27 +23,29 @@ prediction-market example code during March 2026, beginning with refactor
 commit `b34beabd4b` on 2026-03-11, and now carry file-level LGPL provenance
 notices with file-specific change dates:
 
-- `backtests/_defaults.py`
-- `backtests/_kalshi_single_market_runner.py`
-- `backtests/_kalshi_single_market_trade_runner.py`
-- `backtests/_polymarket_single_market_pmxt_runner.py`
-- `backtests/_polymarket_single_market_runner.py`
-- `backtests/_script_helpers.py`
+- `backtests/_shared/_script_helpers.py`
+- `backtests/kalshi_trade_tick/_defaults.py`
+- `backtests/kalshi_trade_tick/_kalshi_single_market_runner.py`
+- `backtests/kalshi_trade_tick/_kalshi_single_market_trade_runner.py`
+- `backtests/polymarket_quote_tick/_defaults.py`
+- `backtests/polymarket_quote_tick/_polymarket_single_market_pmxt_runner.py`
+- `backtests/polymarket_trade_tick/_defaults.py`
+- `backtests/polymarket_trade_tick/_polymarket_single_market_runner.py`
 - `backtests/kalshi_trade_tick/kalshi_breakout.py`
 - `backtests/kalshi_trade_tick/kalshi_ema_crossover.py`
 - `backtests/kalshi_trade_tick/kalshi_panic_fade.py`
 - `backtests/kalshi_trade_tick/kalshi_rsi_reversion.py`
 - `backtests/kalshi_trade_tick/kalshi_spread_capture.py`
-- `backtests/polymarket_pmxt_relay_breakout.py`
-- `backtests/polymarket_pmxt_relay_deep_value_hold.py`
-- `backtests/polymarket_pmxt_relay_ema_crossover.py`
-- `backtests/polymarket_pmxt_relay_final_period_momentum.py`
-- `backtests/polymarket_pmxt_relay_late_favorite_limit_hold.py`
-- `backtests/polymarket_pmxt_relay_panic_fade.py`
-- `backtests/polymarket_pmxt_relay_rsi_reversion.py`
-- `backtests/polymarket_pmxt_relay_spread_capture.py`
-- `backtests/polymarket_pmxt_relay_threshold_momentum.py`
-- `backtests/polymarket_pmxt_relay_vwap_reversion.py`
+- `backtests/polymarket_quote_tick/polymarket_pmxt_relay_breakout.py`
+- `backtests/polymarket_quote_tick/polymarket_pmxt_relay_deep_value_hold.py`
+- `backtests/polymarket_quote_tick/polymarket_pmxt_relay_ema_crossover.py`
+- `backtests/polymarket_quote_tick/polymarket_pmxt_relay_final_period_momentum.py`
+- `backtests/polymarket_quote_tick/polymarket_pmxt_relay_late_favorite_limit_hold.py`
+- `backtests/polymarket_quote_tick/polymarket_pmxt_relay_panic_fade.py`
+- `backtests/polymarket_quote_tick/polymarket_pmxt_relay_rsi_reversion.py`
+- `backtests/polymarket_quote_tick/polymarket_pmxt_relay_spread_capture.py`
+- `backtests/polymarket_quote_tick/polymarket_pmxt_relay_threshold_momentum.py`
+- `backtests/polymarket_quote_tick/polymarket_pmxt_relay_vwap_reversion.py`
 - `backtests/polymarket_trade_tick/polymarket_deep_value_resolution_hold.py`
 - `backtests/polymarket_trade_tick/polymarket_ema_crossover.py`
 - `backtests/polymarket_trade_tick/polymarket_panic_fade.py`

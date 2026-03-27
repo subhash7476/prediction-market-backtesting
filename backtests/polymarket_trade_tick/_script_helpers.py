@@ -9,4 +9,4 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-from backtests._script_helpers import *  # noqa: F403
+from backtests._shared._script_helpers import *  # noqa: F403

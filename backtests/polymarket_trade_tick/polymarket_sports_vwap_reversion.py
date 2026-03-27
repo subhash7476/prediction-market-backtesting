@@ -16,11 +16,9 @@ from __future__ import annotations
 
 import asyncio
 import os
-import sys
 from datetime import UTC
 from datetime import datetime
 from decimal import Decimal
-from pathlib import Path
 
 try:
     from ._script_helpers import ensure_repo_root
@@ -50,23 +48,19 @@ from strategies import TradeTickVWAPReversionStrategy
 
 
 try:
-    from _defaults import DEFAULT_INITIAL_CASH
-    from _defaults import DEFAULT_LOOKBACK_DAYS
-    from _polymarket_single_market_runner import run_single_market_trade_backtest
-    from _script_helpers import parse_bool_env
-    from _script_helpers import parse_csv_env
-except ModuleNotFoundError:
-    _THIS_DIR = Path(__file__).resolve().parent
-    _PARENT_DIR = _THIS_DIR.parent
-    _STRATEGIES_DIR = _PARENT_DIR / "strategies"
-    for _path in (_THIS_DIR, _STRATEGIES_DIR, _PARENT_DIR):
-        if str(_path) not in sys.path:
-            sys.path.insert(0, str(_path))
-    from _defaults import DEFAULT_INITIAL_CASH
-    from _defaults import DEFAULT_LOOKBACK_DAYS
-    from _polymarket_single_market_runner import run_single_market_trade_backtest
-    from _script_helpers import parse_bool_env
-    from _script_helpers import parse_csv_env
+    from ._defaults import DEFAULT_INITIAL_CASH
+    from ._defaults import DEFAULT_LOOKBACK_DAYS
+    from ._polymarket_single_market_runner import run_single_market_trade_backtest
+    from ._script_helpers import parse_bool_env
+    from ._script_helpers import parse_csv_env
+except ImportError:
+    from backtests.polymarket_trade_tick._defaults import DEFAULT_INITIAL_CASH
+    from backtests.polymarket_trade_tick._defaults import DEFAULT_LOOKBACK_DAYS
+    from backtests.polymarket_trade_tick._polymarket_single_market_runner import (
+        run_single_market_trade_backtest,
+    )
+    from backtests.polymarket_trade_tick._script_helpers import parse_bool_env
+    from backtests.polymarket_trade_tick._script_helpers import parse_csv_env
 
 
 NAME = "polymarket_sports_vwap_reversion"

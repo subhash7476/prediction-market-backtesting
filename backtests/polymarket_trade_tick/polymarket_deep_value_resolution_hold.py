@@ -16,12 +16,10 @@ from __future__ import annotations
 
 import asyncio
 import os
-import sys
 from datetime import UTC
 from datetime import datetime
 from datetime import timedelta
 from decimal import Decimal
-from pathlib import Path
 from typing import Any
 
 import pandas as pd
@@ -64,16 +62,13 @@ from nautilus_trader.risk.config import RiskEngineConfig
 
 
 try:
-    from _defaults import DEFAULT_INITIAL_CASH
-    from _defaults import DEFAULT_LOOKBACK_DAYS
-    from _defaults import DEFAULT_POLYMARKET_MARKET_SLUG
-except ModuleNotFoundError:
-    _THIS_DIR = Path(__file__).resolve().parent
-    if str(_THIS_DIR) not in sys.path:
-        sys.path.insert(0, str(_THIS_DIR))
-    from _defaults import DEFAULT_INITIAL_CASH
-    from _defaults import DEFAULT_LOOKBACK_DAYS
-    from _defaults import DEFAULT_POLYMARKET_MARKET_SLUG
+    from ._defaults import DEFAULT_INITIAL_CASH
+    from ._defaults import DEFAULT_LOOKBACK_DAYS
+    from ._defaults import DEFAULT_POLYMARKET_MARKET_SLUG
+except ImportError:
+    from backtests.polymarket_trade_tick._defaults import DEFAULT_INITIAL_CASH
+    from backtests.polymarket_trade_tick._defaults import DEFAULT_LOOKBACK_DAYS
+    from backtests.polymarket_trade_tick._defaults import DEFAULT_POLYMARKET_MARKET_SLUG
 
 
 NAME = "polymarket_deep_value_resolution_hold"

@@ -6,7 +6,7 @@ import os
 import pandas as pd
 import pytest
 
-from backtests._defaults import DEFAULT_POLYMARKET_MARKET_SLUG
+from backtests.polymarket_quote_tick._defaults import DEFAULT_POLYMARKET_MARKET_SLUG
 
 
 @pytest.mark.skipif(

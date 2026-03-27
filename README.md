@@ -100,7 +100,7 @@ Good public examples:
 - Reusable final-period momentum logic: [`strategies/final_period_momentum.py`](strategies/final_period_momentum.py)
 - Reusable late-favorite limit-hold logic: [`strategies/late_favorite_limit_hold.py`](strategies/late_favorite_limit_hold.py)
 - Kalshi trade-tick runner using a root strategy module: [`backtests/kalshi_trade_tick/kalshi_breakout.py`](backtests/kalshi_trade_tick/kalshi_breakout.py)
-- PMXT Polymarket quote-tick runners live under `backtests/polymarket_pmxt_relay_*.py`.
+- PMXT Polymarket quote-tick runners live under `backtests/polymarket_quote_tick/`.
   Current public runners cover EMA crossover, breakout, RSI reversion, spread
   capture, panic fade, VWAP reversion, threshold momentum, final-period
   momentum, deep value, and late-favorite limit hold.
@@ -120,9 +120,9 @@ Use the root `strategies` package for signal logic, then import that logic into 
 
 Three common runner patterns already exist:
 
-- Kalshi trade-tick backtests via [`backtests/_kalshi_single_market_trade_runner.py`](backtests/_kalshi_single_market_trade_runner.py)
-- Polymarket trade-tick backtests via [`backtests/_polymarket_single_market_runner.py`](backtests/_polymarket_single_market_runner.py)
-- Polymarket PMXT L2 backtests via [`backtests/_polymarket_single_market_pmxt_runner.py`](backtests/_polymarket_single_market_pmxt_runner.py)
+- Kalshi trade-tick backtests via [`backtests/kalshi_trade_tick/_kalshi_single_market_trade_runner.py`](backtests/kalshi_trade_tick/_kalshi_single_market_trade_runner.py)
+- Polymarket trade-tick backtests via [`backtests/polymarket_trade_tick/_polymarket_single_market_runner.py`](backtests/polymarket_trade_tick/_polymarket_single_market_runner.py)
+- Polymarket PMXT L2 backtests via [`backtests/polymarket_quote_tick/_polymarket_single_market_pmxt_runner.py`](backtests/polymarket_quote_tick/_polymarket_single_market_pmxt_runner.py)
 
 ## Running Backtests
 
@@ -132,7 +132,7 @@ Interactive menu:
 make backtest
 ```
 
-Any module in `backtests/` or `backtests/private/` with `NAME`, `DESCRIPTION`, and `async def run()` shows up here, except the archived `backtests/polymarket_trade_tick/` set.
+Any module in `backtests/` or `backtests/private/` with `NAME`, `DESCRIPTION`, and `async def run()` shows up here.
 
 Equivalent direct command:
 
@@ -144,7 +144,7 @@ Direct script execution is usually better once you know which runner you want:
 
 ```bash
 MARKET_TICKER=<kalshi-market-ticker> uv run python backtests/kalshi_trade_tick/kalshi_breakout.py
-MARKET_SLUG=<polymarket-market-slug> END_TIME=<utc-iso8601> LOOKBACK_HOURS=4 uv run python -m backtests.polymarket_pmxt_relay_ema_crossover
+MARKET_SLUG=<polymarket-market-slug> END_TIME=<utc-iso8601> LOOKBACK_HOURS=4 uv run python -m backtests.polymarket_quote_tick.polymarket_pmxt_relay_ema_crossover
 MARKET_SLUG=<polymarket-market-slug> uv run python backtests/polymarket_trade_tick/polymarket_vwap_reversion.py
 ```
 
@@ -308,7 +308,7 @@ du -sh ~/.cache/nautilus_trader/pmxt
 
 ```bash
 LOOKBACK_HOURS=4 MIN_PRICE_RANGE=0 TRADE_SIZE=10 \
-  uv run python backtests/polymarket_pmxt_relay_ema_crossover.py
+  uv run python backtests/polymarket_quote_tick/polymarket_pmxt_relay_ema_crossover.py
 ```
 
 - If the relay does not have a requested hour yet, the loader still falls back
@@ -410,8 +410,8 @@ Single-market plotting is built into the shared runner flow used by the public p
 
 - [`backtests/kalshi_trade_tick/kalshi_breakout.py`](backtests/kalshi_trade_tick/kalshi_breakout.py)
 - [`backtests/kalshi_trade_tick/kalshi_panic_fade.py`](backtests/kalshi_trade_tick/kalshi_panic_fade.py)
-- [`backtests/polymarket_pmxt_relay_panic_fade.py`](backtests/polymarket_pmxt_relay_panic_fade.py)
-- [`backtests/polymarket_pmxt_relay_vwap_reversion.py`](backtests/polymarket_pmxt_relay_vwap_reversion.py)
+- [`backtests/polymarket_quote_tick/polymarket_pmxt_relay_panic_fade.py`](backtests/polymarket_quote_tick/polymarket_pmxt_relay_panic_fade.py)
+- [`backtests/polymarket_quote_tick/polymarket_pmxt_relay_vwap_reversion.py`](backtests/polymarket_quote_tick/polymarket_pmxt_relay_vwap_reversion.py)
 
 These write HTML charts to `output/`, typically with names like `output/<backtest>_<market>_legacy.html`.
 

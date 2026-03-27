@@ -21,12 +21,10 @@ import os
 import sys
 import time
 from pathlib import Path
+from typing import Any
 
 PROJECT_ROOT = Path(__file__).parent
 BACKTESTS_ROOT = PROJECT_ROOT / "backtests"
-DISCOVERY_EXCLUDED_DIRS = {
-    "polymarket_trade_tick",
-}
 
 DIM = "\033[2m"
 BOLD = "\033[1m"
@@ -52,8 +50,6 @@ def discover() -> list[dict]:
         relative_parts = path.relative_to(BACKTESTS_ROOT).parts
         if path.name == "__init__.py":
             continue
-        if any(part in DISCOVERY_EXCLUDED_DIRS for part in relative_parts[:-1]):
-            continue
         if any(part.startswith("_") for part in relative_parts):
             continue
 
@@ -70,18 +66,71 @@ def discover() -> list[dict]:
             {
                 "name": getattr(mod, "NAME", path.stem),
                 "description": getattr(mod, "DESCRIPTION", ""),
+                "relative_parts": relative_parts,
                 "run": mod.run,
             }
         )
     return found
 
 
+def _relative_parts(backtest: dict[str, Any]) -> tuple[str, ...]:
+    relative_parts = backtest.get("relative_parts")
+    if isinstance(relative_parts, tuple):
+        return relative_parts
+    if isinstance(relative_parts, list):
+        return tuple(str(part) for part in relative_parts)
+    return (f"{backtest['name']}.py",)
+
+
+def _build_menu_tree(backtests: list[dict[str, Any]]) -> dict[str, Any]:
+    root: dict[str, Any] = {"dirs": {}, "entries": []}
+    for index, backtest in enumerate(backtests, start=1):
+        node = root
+        relative_parts = _relative_parts(backtest)
+        for folder in relative_parts[:-1]:
+            node = node["dirs"].setdefault(folder, {"dirs": {}, "entries": []})
+        node["entries"].append((index, relative_parts[-1], backtest))
+    return root
+
+
+def _render_menu_tree(
+    node: dict[str, Any],
+    *,
+    prefix: str = "",
+) -> list[str]:
+    lines: list[str] = []
+    children: list[tuple[str, Any, Any]] = [
+        ("dir", name, child_node) for name, child_node in node["dirs"].items()
+    ]
+    children.extend(
+        ("entry", (index, filename), backtest)
+        for index, filename, backtest in node["entries"]
+    )
+
+    for position, (kind, payload, child) in enumerate(children):
+        is_last = position == len(children) - 1
+        connector = "└── " if is_last else "├── "
+        child_prefix = prefix + ("    " if is_last else "│   ")
+
+        if kind == "dir":
+            lines.append(f"{prefix}{connector}{payload}/")
+            lines.extend(_render_menu_tree(child, prefix=child_prefix))
+            continue
+
+        index, filename = payload
+        description = child["description"]
+        desc = f" {DIM}— {description}{RESET}" if description else ""
+        lines.append(f"{prefix}{connector}{CYAN}{index}{RESET}. {filename}{desc}")
+
+    return lines
+
+
 def show_menu(backtests: list[dict]) -> int:
     """Print numbered menu and return the chosen index (0-based), or -1 to exit."""
     print(f"\n{BOLD}Select a backtest:{RESET}\n")
-    for i, s in enumerate(backtests, 1):
-        desc = f" {DIM}— {s['description']}{RESET}" if s["description"] else ""
-        print(f"  {CYAN}{i}{RESET}. {s['name']}{desc}")
+    print(f"  {BOLD}backtests/{RESET}")
+    for line in _render_menu_tree(_build_menu_tree(backtests), prefix="  "):
+        print(line)
     print(f"\n  {DIM}0. Exit{RESET}\n")
 
     try:
@@ -125,7 +174,7 @@ def main() -> None:
 
     if _env_flag_enabled(ENABLE_TIMING_ENV):
         try:
-            from backtests._timing_test import install_timing
+            from backtests._shared._timing_test import install_timing
 
             install_timing()
         except ImportError:
