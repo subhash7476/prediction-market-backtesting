@@ -926,7 +926,7 @@ def create_app(config: RelayConfig) -> web.Application:
         config.db_path, event_retention=config.event_retention
     )
     app[RATE_LIMITER_APP_KEY] = RequestRateLimiter(config.api_rate_limit_per_minute)
-    app[INDEX_APP_KEY].initialize()
+    app[INDEX_APP_KEY].initialize(apply_maintenance=False)
     app.on_response_prepare.append(on_prepare_response)
     app.router.add_get("/healthz", healthz)
     app.router.add_get("/v1/stats", stats)
