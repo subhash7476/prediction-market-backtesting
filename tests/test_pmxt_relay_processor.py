@@ -5,6 +5,7 @@ from pathlib import Path
 import pyarrow as pa
 import pyarrow.parquet as pq
 
+import pmxt_relay.processor as processor_module
 from pmxt_relay.config import RelayConfig
 from pmxt_relay.processor import RelayHourProcessor
 from pmxt_relay.processor import materialize_filtered_hour
@@ -241,3 +242,193 @@ def test_hour_processor_reports_progress(tmp_path):
 
     assert len(result.artifacts) == 2
     assert progress[-1] == (2, 2)
+
+
+def test_prebuild_from_processed_streams_once_and_preserves_order(
+    tmp_path: Path,
+    monkeypatch,
+):
+    config = _make_config(tmp_path)
+    config.ensure_directories()
+    raw_path = (
+        config.raw_root
+        / "2026"
+        / "03"
+        / "21"
+        / "polymarket_orderbook_2026-03-21T14.parquet"
+    )
+    raw_path.parent.mkdir(parents=True, exist_ok=True)
+    pq.write_table(
+        pa.table(
+            {
+                "market_id": [
+                    "condition-a",
+                    "condition-b",
+                    "condition-a",
+                    "condition-a",
+                    "condition-b",
+                    "condition-a",
+                ],
+                "update_type": [
+                    "book_snapshot",
+                    "price_change",
+                    "price_change",
+                    "price_change",
+                    "book_snapshot",
+                    "price_change",
+                ],
+                "data": [
+                    '{"token_id":"token-yes","seq":1}',
+                    '{"token_id":"token-no","seq":2}',
+                    '{"token_id":"token-yes","seq":3}',
+                    '{"token_id":"token-yes","seq":4}',
+                    '{"token_id":"token-no","seq":5}',
+                    '{"token_id":"token-yes","seq":6}',
+                ],
+            }
+        ),
+        raw_path,
+        row_group_size=2,
+    )
+
+    processor = RelayHourProcessor(config)
+    processor.process_hour(
+        "polymarket_orderbook_2026-03-21T14.parquet",
+        raw_path,
+        skip_filtered=True,
+    )
+
+    processed_path = config.processed_root / processed_relative_path(
+        "polymarket_orderbook_2026-03-21T14.parquet"
+    )
+    monkeypatch.setattr(processor_module, "PARQUET_BATCH_SIZE", 2)
+
+    progress: list[tuple[int, int]] = []
+    artifacts = processor.prebuild_filtered_from_processed(
+        "polymarket_orderbook_2026-03-21T14.parquet",
+        processed_path,
+        progress_callback=lambda processed, total: progress.append((processed, total)),
+    )
+
+    assert {
+        (artifact.condition_id, artifact.token_id, artifact.row_count)
+        for artifact in artifacts
+    } == {
+        ("condition-a", "token-yes", 4),
+        ("condition-b", "token-no", 2),
+    }
+    assert progress == [(0, 6), (2, 6), (4, 6), (6, 6)]
+
+    filtered_yes_path = (
+        config.filtered_root
+        / "condition-a"
+        / "token-yes"
+        / "polymarket_orderbook_2026-03-21T14.parquet"
+    )
+    filtered_no_path = (
+        config.filtered_root
+        / "condition-b"
+        / "token-no"
+        / "polymarket_orderbook_2026-03-21T14.parquet"
+    )
+    assert pq.read_table(filtered_yes_path).to_pylist() == [
+        {"update_type": "book_snapshot", "data": '{"token_id":"token-yes","seq":1}'},
+        {"update_type": "price_change", "data": '{"token_id":"token-yes","seq":3}'},
+        {"update_type": "price_change", "data": '{"token_id":"token-yes","seq":4}'},
+        {"update_type": "price_change", "data": '{"token_id":"token-yes","seq":6}'},
+    ]
+    assert pq.read_table(filtered_no_path).to_pylist() == [
+        {"update_type": "price_change", "data": '{"token_id":"token-no","seq":2}'},
+        {"update_type": "book_snapshot", "data": '{"token_id":"token-no","seq":5}'},
+    ]
+
+
+def test_prebuild_from_processed_matches_direct_filtered_outputs(
+    tmp_path: Path,
+    monkeypatch,
+):
+    direct_config = _make_config(tmp_path / "direct")
+    prebuild_config = _make_config(tmp_path / "prebuild")
+    direct_config.ensure_directories()
+    prebuild_config.ensure_directories()
+
+    filename = "polymarket_orderbook_2026-03-21T15.parquet"
+    rows = pa.table(
+        {
+            "market_id": [
+                "condition-a",
+                "condition-b",
+                "condition-a",
+                "condition-c",
+                "condition-b",
+                "condition-a",
+                "condition-c",
+                "condition-a",
+            ],
+            "update_type": [
+                "book_snapshot",
+                "price_change",
+                "price_change",
+                "book_snapshot",
+                "price_change",
+                "price_change",
+                "price_change",
+                "book_snapshot",
+            ],
+            "data": [
+                '{"token_id":"token-yes","seq":1}',
+                '{"token_id":"token-no","seq":2}',
+                '{"token_id":"token-yes","seq":3}',
+                '{"token_id":"token-maybe","seq":4}',
+                '{"token_id":"token-no","seq":5}',
+                '{"token_id":"token-yes","seq":6}',
+                '{"token_id":"token-maybe","seq":7}',
+                '{"token_id":"token-yes","seq":8}',
+            ],
+        }
+    )
+
+    direct_raw_path = (
+        direct_config.raw_root / "2026" / "03" / "21" / filename
+    )
+    prebuild_raw_path = (
+        prebuild_config.raw_root / "2026" / "03" / "21" / filename
+    )
+    direct_raw_path.parent.mkdir(parents=True, exist_ok=True)
+    prebuild_raw_path.parent.mkdir(parents=True, exist_ok=True)
+    pq.write_table(rows, direct_raw_path, row_group_size=2)
+    pq.write_table(rows, prebuild_raw_path, row_group_size=2)
+
+    monkeypatch.setattr(processor_module, "PARQUET_BATCH_SIZE", 2)
+
+    direct_processor = RelayHourProcessor(direct_config)
+    direct_artifacts = direct_processor.process_hour(filename, direct_raw_path).artifacts
+
+    prebuild_processor = RelayHourProcessor(prebuild_config)
+    prebuild_processor.process_hour(filename, prebuild_raw_path, skip_filtered=True)
+    processed_path = prebuild_config.processed_root / processed_relative_path(filename)
+    prebuilt_artifacts = prebuild_processor.prebuild_filtered_from_processed(
+        filename,
+        processed_path,
+    )
+
+    direct_keys = sorted(
+        (artifact.condition_id, artifact.token_id, artifact.row_count)
+        for artifact in direct_artifacts
+    )
+    prebuilt_keys = sorted(
+        (artifact.condition_id, artifact.token_id, artifact.row_count)
+        for artifact in prebuilt_artifacts
+    )
+    assert prebuilt_keys == direct_keys
+
+    for condition_id, token_id, _row_count in direct_keys:
+        direct_filtered_path = (
+            direct_config.filtered_root / condition_id / token_id / filename
+        )
+        prebuilt_filtered_path = (
+            prebuild_config.filtered_root / condition_id / token_id / filename
+        )
+        assert pq.read_table(prebuilt_filtered_path).to_pylist() == pq.read_table(
+            direct_filtered_path
+        ).to_pylist()
