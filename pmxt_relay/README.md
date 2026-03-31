@@ -38,6 +38,7 @@ intermediate shard. The public badges and `/v1/stats` use this definition:
 
 - `mirrored` badge: `mirror_status=ready` / total discovered
 - `processed` badge: `prebuild_status=ready` / `mirror_status=ready`
+- `rate` badge: rolling 24-hour completed-hour rate based on `prebuilt_at`
 
 The inflight reset on startup is split by stage so the worker and prebuild
 service don't clobber each other's state:
@@ -181,11 +182,17 @@ fail2ban-client status sshd
 - `GET /v1/queue`
 - `GET /v1/events?limit=100`
 - `GET /v1/inflight`
+- `GET /v1/badge/{status,backfill,mirrored,processed,rate,latest,lag}`
+- `GET /v1/badge/{status,backfill,mirrored,processed,rate,latest,lag}.svg`
+- `GET /v1/badge/{cpu,mem,disk}.svg`
 - `GET /v1/markets/{condition_id}/tokens/{token_id}/hours?start=...&end=...`
 - `GET /v1/filtered/{condition_id}/{token_id}/{filename}`
 
 Progress and observability:
 
+- `/v1/stats` includes both the total completed-hour count and a rolling
+  `processed_hours_per_hour_24h` rate so stalled relay throughput is visible
+  even when `processed_hours` changes slowly
 - `/v1/queue` shows current `pending/processing/error` counts for mirror and
   preprocess work plus the latest mirrored and processed hour
 - `/v1/events` shows recent relay events such as discover, mirror start,

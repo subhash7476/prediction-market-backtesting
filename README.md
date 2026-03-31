@@ -21,6 +21,7 @@ Relay VPS:
 [![PMXT relay](https://209-209-10-83.sslip.io/v1/badge/status.svg)](https://209-209-10-83.sslip.io/v1/stats)
 [![PMXT mirrored](https://209-209-10-83.sslip.io/v1/badge/mirrored.svg)](https://209-209-10-83.sslip.io/v1/stats)
 [![PMXT processed](https://209-209-10-83.sslip.io/v1/badge/processed.svg)](https://209-209-10-83.sslip.io/v1/stats)
+[![PMXT rate](https://209-209-10-83.sslip.io/v1/badge/rate.svg?v=1)](https://209-209-10-83.sslip.io/v1/stats)
 [![PMXT latest](https://209-209-10-83.sslip.io/v1/badge/latest.svg?v=3)](https://209-209-10-83.sslip.io/v1/queue)
 [![PMXT lag](https://209-209-10-83.sslip.io/v1/badge/lag.svg?v=3)](https://209-209-10-83.sslip.io/v1/queue)
 [![Relay CPU](https://209-209-10-83.sslip.io/v1/badge/cpu.svg)](https://209-209-10-83.sslip.io/v1/system)
@@ -391,13 +392,16 @@ The full deployment and hardening notes live in
 Relay progress can be checked over HTTP:
 
 - `/v1/stats` for high-level counts
+  This now includes `processed_hours_last_24h` and
+  `processed_hours_per_hour_24h` so we can see whether the relay is actually
+  finishing hours fast enough instead of just looking busy.
 - `/v1/system` for live CPU, memory, and relay-disk usage
 - `/v1/queue` for `pending/processing/error` queue state
 - `/v1/events?limit=100` for recent discover/download/process/error events
 - `/v1/inflight` for active temp-tree progress while a large hour is still
   being crunched
 - `/v1/badge/status`, `/v1/badge/backfill`, `/v1/badge/mirrored`,
-  `/v1/badge/processed`, `/v1/badge/latest`, `/v1/badge/lag`,
+  `/v1/badge/processed`, `/v1/badge/rate`, `/v1/badge/latest`, `/v1/badge/lag`,
   `/v1/badge/cpu`, `/v1/badge/mem`, and
   `/v1/badge/disk` for the live README status tags
 

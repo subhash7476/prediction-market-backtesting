@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import replace
+from datetime import UTC
+from datetime import datetime
 import os
 from pathlib import Path
 from unittest.mock import patch
@@ -296,6 +298,24 @@ def test_badge_endpoints_return_shields_payloads(tmp_path: Path):
             lag_response = await client.get("/v1/badge/lag")
             assert lag_response.status == 200
             lag_payload = await lag_response.json()
+
+            with index._conn:  # noqa: SLF001
+                index._conn.execute(  # noqa: SLF001
+                    """
+                    UPDATE archive_hours
+                    SET prebuilt_at = ?
+                    WHERE filename = ?
+                    """,
+                    ("2026-03-31T11:30:00+00:00", ready_filename),
+                )
+
+            with patch(
+                "pmxt_relay.index_db._utc_now_datetime",
+                return_value=datetime(2026, 3, 31, 12, 0, tzinfo=UTC),
+            ):
+                rate_response = await client.get("/v1/badge/rate")
+                assert rate_response.status == 200
+                rate_payload = await rate_response.json()
         finally:
             await client.close()
 
@@ -335,6 +355,12 @@ def test_badge_endpoints_return_shields_payloads(tmp_path: Path):
             "message": "1 hrs",
             "color": "green",
         }
+        assert rate_payload == {
+            "schemaVersion": 1,
+            "label": "PMXT rate",
+            "message": "0.04 hr/hr",
+            "color": "orange",
+        }
 
     asyncio.run(scenario())
 
@@ -370,6 +396,7 @@ def test_badge_svg_endpoints_return_svg(tmp_path: Path):
                 "/v1/badge/status.svg",
                 "/v1/badge/mirrored.svg",
                 "/v1/badge/processed.svg",
+                "/v1/badge/rate.svg",
             ):
                 response = await client.get(path)
                 assert response.status == 200
@@ -383,6 +410,7 @@ def test_badge_svg_endpoints_return_svg(tmp_path: Path):
         assert "<svg" in svg_payloads["/v1/badge/status.svg"]
         assert "PMXT mirrored" in svg_payloads["/v1/badge/mirrored.svg"]
         assert "PMXT processed" in svg_payloads["/v1/badge/processed.svg"]
+        assert "PMXT rate" in svg_payloads["/v1/badge/rate.svg"]
 
     asyncio.run(scenario())
 
