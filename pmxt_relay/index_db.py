@@ -4,14 +4,19 @@ import sqlite3
 from dataclasses import dataclass
 from datetime import UTC
 from datetime import datetime
+from datetime import timedelta
 from pathlib import Path
 import json
 
 from pmxt_relay.storage import parse_archive_hour
 
 
+def _utc_now_datetime() -> datetime:
+    return datetime.now(UTC)
+
+
 def _utc_now() -> str:
-    return datetime.now(UTC).isoformat()
+    return _utc_now_datetime().isoformat()
 
 
 @dataclass(frozen=True)
@@ -583,7 +588,27 @@ class RelayIndex:
         cursor = self._conn.execute(query, params)
         return cursor.fetchall()
 
-    def stats(self) -> dict[str, int | str | None]:
+    def _processed_rate_summary(self, *, window_hours: int) -> dict[str, int | float]:
+        cutoff = (_utc_now_datetime() - timedelta(hours=window_hours)).isoformat()
+        processed_hours_last_window = self._conn.execute(
+            """
+            SELECT COUNT(*)
+            FROM archive_hours
+            WHERE prebuild_status = 'ready'
+              AND prebuilt_at IS NOT NULL
+              AND prebuilt_at >= ?
+            """,
+            (cutoff,),
+        ).fetchone()[0]
+        return {
+            f"processed_hours_last_{window_hours}h": processed_hours_last_window,
+            f"processed_hours_per_hour_{window_hours}h": round(
+                processed_hours_last_window / max(1, window_hours),
+                2,
+            ),
+        }
+
+    def stats(self) -> dict[str, int | float | str | None]:
         row = self._conn.execute(
             """
             SELECT
@@ -617,7 +642,7 @@ class RelayIndex:
         last_error_at = self._conn.execute(
             "SELECT MAX(created_at) FROM relay_events WHERE level = 'ERROR'"
         ).fetchone()[0]
-        return {
+        payload = {
             "archive_hours": row["archive_hours"],
             "mirrored_hours": row["mirrored_hours"],
             "sharded_hours": row["sharded_hours"],
@@ -634,6 +659,8 @@ class RelayIndex:
             "last_event_at": last_event_at,
             "last_error_at": last_error_at,
         }
+        payload.update(self._processed_rate_summary(window_hours=24))
+        return payload
 
     def queue_summary(self) -> dict[str, int | str | None]:
         row = self._conn.execute(

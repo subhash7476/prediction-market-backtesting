@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import UTC
+from datetime import datetime
 from pathlib import Path
 
 from pmxt_relay.index_db import FilteredHourArtifact, RelayIndex
@@ -233,6 +235,53 @@ def test_mark_prebuilt_tracks_filtered_artifact_count(tmp_path: Path):
     assert stats["ready_to_prebuild_hours"] == 0
     assert stats["filtered_hours"] == 42
     assert index.list_hours_needing_filtered_prebuild() == []
+
+
+def test_stats_include_processed_hours_per_hour_24h(tmp_path: Path, monkeypatch):
+    index = RelayIndex(tmp_path / "relay.sqlite3")
+    index.initialize()
+
+    recent_filename = "polymarket_orderbook_2026-03-21T12.parquet"
+    stale_filename = "polymarket_orderbook_2026-03-20T12.parquet"
+    for filename in (recent_filename, stale_filename):
+        index.upsert_discovered_hour(filename, "https://r2.pmxt.dev/" + filename, 1)
+        index.mark_mirrored(
+            filename,
+            local_path="/tmp/" + filename,
+            etag=None,
+            content_length=None,
+            last_modified=None,
+        )
+        index.mark_sharded(filename)
+        index.mark_prebuilt(filename, filtered_artifact_count=1)
+
+    with index._conn:  # noqa: SLF001
+        index._conn.execute(  # noqa: SLF001
+            """
+            UPDATE archive_hours
+            SET prebuilt_at = ?
+            WHERE filename = ?
+            """,
+            ("2026-03-22T11:30:00+00:00", recent_filename),
+        )
+        index._conn.execute(  # noqa: SLF001
+            """
+            UPDATE archive_hours
+            SET prebuilt_at = ?
+            WHERE filename = ?
+            """,
+            ("2026-03-20T10:00:00+00:00", stale_filename),
+        )
+
+    monkeypatch.setattr(
+        "pmxt_relay.index_db._utc_now_datetime",
+        lambda: datetime(2026, 3, 22, 12, 0, tzinfo=UTC),
+    )
+
+    stats = index.stats()
+
+    assert stats["processed_hours_last_24h"] == 1
+    assert stats["processed_hours_per_hour_24h"] == 0.04
 
 
 def test_error_count_deprioritizes_but_never_abandons(tmp_path: Path):

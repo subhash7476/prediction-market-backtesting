@@ -349,6 +349,36 @@ def _lag_badge_payload(
     )
 
 
+def _rate_badge_payload(
+    *,
+    stats: dict[str, int | str | None | float],
+) -> dict[str, object]:
+    rate = float(stats.get("processed_hours_per_hour_24h") or 0.0)
+    if rate >= 4.0:
+        color = "brightgreen"
+    elif rate >= 1.0:
+        color = "green"
+    elif rate >= 0.5:
+        color = "yellowgreen"
+    elif rate > 0.0:
+        color = "orange"
+    else:
+        color = "red"
+
+    if rate >= 10.0:
+        message = f"{rate:.0f} hr/hr"
+    elif rate >= 1.0:
+        message = f"{rate:.1f} hr/hr"
+    else:
+        message = f"{rate:.2f} hr/hr"
+
+    return _badge_payload(
+        label="PMXT rate",
+        message=message,
+        color=color,
+    )
+
+
 class RequestRateLimiter:
     def __init__(self, requests_per_minute: int) -> None:
         self._requests_per_minute = requests_per_minute
@@ -623,6 +653,11 @@ async def badge_lag(request: web.Request) -> web.Response:
     return web.json_response(_lag_badge_payload(stats=index.stats()))
 
 
+async def badge_rate(request: web.Request) -> web.Response:
+    index = request.app[INDEX_APP_KEY]
+    return web.json_response(_rate_badge_payload(stats=index.stats()))
+
+
 async def badge_cpu_svg(request: web.Request) -> web.Response:
     config = request.app[CONFIG_APP_KEY]
     metrics = await asyncio.to_thread(_system_metrics_snapshot, config)
@@ -680,6 +715,11 @@ async def badge_latest_svg(request: web.Request) -> web.Response:
 async def badge_lag_svg(request: web.Request) -> web.Response:
     index = request.app[INDEX_APP_KEY]
     return _badge_svg_response(_lag_badge_payload(stats=index.stats()))
+
+
+async def badge_rate_svg(request: web.Request) -> web.Response:
+    index = request.app[INDEX_APP_KEY]
+    return _badge_svg_response(_rate_badge_payload(stats=index.stats()))
 
 
 async def list_filtered_hours(request: web.Request) -> web.Response:
@@ -825,12 +865,14 @@ def create_app(config: RelayConfig) -> web.Application:
     app.router.add_get("/v1/badge/processed", badge_processed)
     app.router.add_get("/v1/badge/latest", badge_latest)
     app.router.add_get("/v1/badge/lag", badge_lag)
+    app.router.add_get("/v1/badge/rate", badge_rate)
     app.router.add_get("/v1/badge/status.svg", badge_status_svg)
     app.router.add_get("/v1/badge/backfill.svg", badge_backfill_svg)
     app.router.add_get("/v1/badge/mirrored.svg", badge_mirrored_svg)
     app.router.add_get("/v1/badge/processed.svg", badge_processed_svg)
     app.router.add_get("/v1/badge/latest.svg", badge_latest_svg)
     app.router.add_get("/v1/badge/lag.svg", badge_lag_svg)
+    app.router.add_get("/v1/badge/rate.svg", badge_rate_svg)
     app.router.add_get("/v1/badge/cpu.svg", badge_cpu_svg)
     app.router.add_get("/v1/badge/mem.svg", badge_mem_svg)
     app.router.add_get("/v1/badge/disk.svg", badge_disk_svg)
