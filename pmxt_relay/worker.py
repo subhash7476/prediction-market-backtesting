@@ -21,6 +21,7 @@ from pmxt_relay.storage import raw_relative_path
 
 
 LOG = logging.getLogger(__name__)
+_PROGRESS_LOG_ROW_INTERVAL = 5_000_000
 
 
 class RelayWorker:
@@ -72,6 +73,19 @@ class RelayWorker:
             message=message,
             filename=filename,
             payload=payload,
+        )
+
+    @staticmethod
+    def _should_report_progress(
+        *,
+        processed_rows: int,
+        total_rows: int,
+        last_reported_rows: int,
+    ) -> bool:
+        return (
+            processed_rows >= total_rows
+            or last_reported_rows < 0
+            or (processed_rows - last_reported_rows) >= _PROGRESS_LOG_ROW_INTERVAL
         )
 
     def run_forever(self) -> None:
@@ -303,21 +317,16 @@ class RelayWorker:
                 filename
             )
             last_reported_rows = -1
-            last_report_monotonic = 0.0
 
             def report_progress(processed_rows: int, total_rows: int) -> None:
-                nonlocal last_reported_rows, last_report_monotonic
-                current = time.monotonic()
-                should_log = (
-                    processed_rows >= total_rows
-                    or last_reported_rows < 0
-                    or (processed_rows - last_reported_rows) >= 5_000_000
-                    or (current - last_report_monotonic) >= 5.0
-                )
-                if not should_log:
+                nonlocal last_reported_rows
+                if not self._should_report_progress(
+                    processed_rows=processed_rows,
+                    total_rows=total_rows,
+                    last_reported_rows=last_reported_rows,
+                ):
                     return
                 last_reported_rows = processed_rows
-                last_report_monotonic = current
                 self._record_event(
                     level="INFO",
                     event_type="process_progress",
@@ -481,21 +490,16 @@ class RelayWorker:
                 payload={"processed_path": str(processed_path)},
             )
             last_reported_rows = -1
-            last_report_monotonic = 0.0
 
             def report_progress(processed_rows: int, total_rows: int) -> None:
-                nonlocal last_reported_rows, last_report_monotonic
-                current = time.monotonic()
-                should_log = (
-                    processed_rows >= total_rows
-                    or last_reported_rows < 0
-                    or (processed_rows - last_reported_rows) >= 5_000_000
-                    or (current - last_report_monotonic) >= 5.0
-                )
-                if not should_log:
+                nonlocal last_reported_rows
+                if not self._should_report_progress(
+                    processed_rows=processed_rows,
+                    total_rows=total_rows,
+                    last_reported_rows=last_reported_rows,
+                ):
                     return
                 last_reported_rows = processed_rows
-                last_report_monotonic = current
                 self._record_event(
                     level="INFO",
                     event_type="filtered_prebuild_progress",

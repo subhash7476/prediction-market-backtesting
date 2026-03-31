@@ -1,14 +1,23 @@
 from __future__ import annotations
 
+import logging
 import sqlite3
 from dataclasses import dataclass
 from datetime import UTC
 from datetime import datetime
 from datetime import timedelta
-from pathlib import Path
 import json
+from pathlib import Path
+import time
 
 from pmxt_relay.storage import parse_archive_hour
+
+LOG = logging.getLogger(__name__)
+_LOCKED_ERROR_SNIPPETS = (
+    "database is locked",
+    "database schema is locked",
+    "database table is locked",
+)
 
 
 def _utc_now_datetime() -> datetime:
@@ -39,11 +48,24 @@ class PrebuildProgress:
 
 
 class RelayIndex:
-    def __init__(self, db_path: Path, *, event_retention: int = 50000) -> None:
+    _REQUIRED_TABLES = frozenset({"archive_hours", "filtered_hours", "relay_events"})
+    _REQUIRED_ARCHIVE_COLUMNS = frozenset(
+        {"filtered_artifact_count", "prebuild_status", "prebuilt_at", "error_count"}
+    )
+
+    def __init__(
+        self,
+        db_path: Path,
+        *,
+        event_retention: int = 50000,
+        lock_retry_delay_secs: float = 0.25,
+    ) -> None:
         db_path.parent.mkdir(parents=True, exist_ok=True)
         self._conn = sqlite3.connect(db_path, timeout=60, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
         self._event_retention = event_retention
+        self._lock_retry_delay_secs = max(0.01, lock_retry_delay_secs)
+        self._conn.execute("PRAGMA busy_timeout=60000")
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.execute("PRAGMA synchronous=NORMAL")
         self._conn.execute("PRAGMA temp_store=MEMORY")
@@ -54,11 +76,27 @@ class RelayIndex:
     def initialize(
         self,
         *,
+        apply_maintenance: bool = True,
         reset_inflight: bool = False,
         reset_mirror_inflight: bool = True,
         reset_process_inflight: bool = True,
         reset_prebuild_inflight: bool = True,
     ) -> tuple[int, int, int]:
+        schema_needs_bootstrap = self._schema_needs_bootstrap()
+        if schema_needs_bootstrap or apply_maintenance:
+            self._run_with_lock_retry(self._ensure_schema)
+        if apply_maintenance:
+            self._run_with_lock_retry(self._normalize_archive_hours)
+            self.prune_events(best_effort=True)
+        if reset_inflight and apply_maintenance:
+            return self.reset_inflight_work(
+                reset_mirror=reset_mirror_inflight,
+                reset_process=reset_process_inflight,
+                reset_prebuild=reset_prebuild_inflight,
+            )
+        return 0, 0, 0
+
+    def _ensure_schema(self) -> None:
         self._conn.executescript(
             """
             CREATE TABLE IF NOT EXISTS archive_hours (
@@ -133,32 +171,75 @@ class RelayIndex:
             "error_count",
             "INTEGER NOT NULL DEFAULT 0",
         )
-        self._conn.execute(
-            """
-            UPDATE archive_hours
-            SET prebuild_status = 'ready',
-                prebuilt_at = COALESCE(prebuilt_at, processed_at)
-            WHERE filtered_artifact_count > 0
-              AND prebuild_status != 'ready'
-            """
-        )
-        self._conn.execute(
-            """
-            UPDATE archive_hours
-            SET prebuild_status = 'pending'
-            WHERE (prebuild_status IS NULL OR prebuild_status = '')
-              AND filtered_artifact_count = 0
-            """
-        )
-        self._conn.commit()
-        self.prune_events()
-        if reset_inflight:
-            return self.reset_inflight_work(
-                reset_mirror=reset_mirror_inflight,
-                reset_process=reset_process_inflight,
-                reset_prebuild=reset_prebuild_inflight,
+
+    def _normalize_archive_hours(self) -> None:
+        with self._conn:
+            self._conn.execute(
+                """
+                UPDATE archive_hours
+                SET prebuild_status = 'ready',
+                    prebuilt_at = COALESCE(prebuilt_at, processed_at)
+                WHERE filtered_artifact_count > 0
+                  AND prebuild_status != 'ready'
+                """
             )
-        return 0, 0, 0
+            self._conn.execute(
+                """
+                UPDATE archive_hours
+                SET prebuild_status = 'pending'
+                WHERE (prebuild_status IS NULL OR prebuild_status = '')
+                  AND filtered_artifact_count = 0
+                """
+            )
+
+    def _schema_needs_bootstrap(self) -> bool:
+        tables = {
+            row[0]
+            for row in self._conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            )
+        }
+        if not self._REQUIRED_TABLES.issubset(tables):
+            return True
+        archive_columns = {
+            row[1] for row in self._conn.execute("PRAGMA table_info(archive_hours)")
+        }
+        return not self._REQUIRED_ARCHIVE_COLUMNS.issubset(archive_columns)
+
+    def _rollback_quietly(self) -> None:
+        try:
+            self._conn.rollback()
+        except sqlite3.Error:
+            pass
+
+    def _run_with_lock_retry(
+        self,
+        operation,
+        *,
+        swallow_after_secs: float | None = None,
+        default=None,
+    ):
+        delay = self._lock_retry_delay_secs
+        started = time.monotonic()
+        while True:
+            try:
+                return operation()
+            except sqlite3.OperationalError as exc:
+                message = str(exc).lower()
+                if not any(snippet in message for snippet in _LOCKED_ERROR_SNIPPETS):
+                    raise
+                self._rollback_quietly()
+                if (
+                    swallow_after_secs is not None
+                    and (time.monotonic() - started) >= swallow_after_secs
+                ):
+                    LOG.warning(
+                        "Skipping best-effort relay index write after %.1fs of lock contention",
+                        time.monotonic() - started,
+                    )
+                    return default
+                time.sleep(delay)
+                delay = min(delay * 2, 5.0)
 
     def _ensure_archive_hours_column(self, name: str, definition: str) -> None:
         columns = {
@@ -174,21 +255,29 @@ class RelayIndex:
             if "duplicate column name" not in str(exc).lower():
                 raise
 
-    def prune_events(self) -> None:
-        with self._conn:
-            self._conn.execute(
-                """
-                DELETE FROM relay_events
-                WHERE id NOT IN (
-                    SELECT id
-                    FROM relay_events
-                    ORDER BY id DESC
-                    LIMIT ?
+    def prune_events(self, *, best_effort: bool = False) -> None:
+        def operation() -> None:
+            with self._conn:
+                self._conn.execute(
+                    """
+                    DELETE FROM relay_events
+                    WHERE id NOT IN (
+                        SELECT id
+                        FROM relay_events
+                        ORDER BY id DESC
+                        LIMIT ?
+                    )
+                    """,
+                    (self._event_retention,),
                 )
-                """,
-                (self._event_retention,),
-            )
-        self._events_since_prune = 0
+
+        result = self._run_with_lock_retry(
+            operation,
+            swallow_after_secs=10.0 if best_effort else None,
+            default=False,
+        )
+        if result is not False:
+            self._events_since_prune = 0
 
     def reset_inflight_work(
         self,
@@ -197,78 +286,85 @@ class RelayIndex:
         reset_process: bool = True,
         reset_prebuild: bool = True,
     ) -> tuple[int, int, int]:
-        with self._conn:
-            mirror_cursor = (
-                self._conn.execute(
-                    """
-                    UPDATE archive_hours
-                    SET mirror_status = 'pending',
-                        last_error = COALESCE(last_error, 'mirror interrupted by restart'),
-                        error_count = error_count + 1
-                    WHERE mirror_status = 'processing'
-                    """
+        def operation() -> tuple[int, int, int]:
+            with self._conn:
+                mirror_cursor = (
+                    self._conn.execute(
+                        """
+                        UPDATE archive_hours
+                        SET mirror_status = 'pending',
+                            last_error = COALESCE(last_error, 'mirror interrupted by restart'),
+                            error_count = error_count + 1
+                        WHERE mirror_status = 'processing'
+                        """
+                    )
+                    if reset_mirror
+                    else None
                 )
-                if reset_mirror
-                else None
-            )
-            process_cursor = (
-                self._conn.execute(
-                    """
-                    UPDATE archive_hours
-                    SET process_status = 'pending',
-                        last_error = COALESCE(last_error, 'processing interrupted by restart'),
-                        error_count = error_count + 1
-                    WHERE process_status = 'processing'
-                    """
+                process_cursor = (
+                    self._conn.execute(
+                        """
+                        UPDATE archive_hours
+                        SET process_status = 'pending',
+                            last_error = COALESCE(last_error, 'processing interrupted by restart'),
+                            error_count = error_count + 1
+                        WHERE process_status = 'processing'
+                        """
+                    )
+                    if reset_process
+                    else None
                 )
-                if reset_process
-                else None
-            )
-            prebuild_cursor = (
-                self._conn.execute(
-                    """
-                    UPDATE archive_hours
-                    SET prebuild_status = 'pending',
-                        last_error = COALESCE(last_error, 'prebuild interrupted by restart'),
-                        error_count = error_count + 1
-                    WHERE prebuild_status = 'processing'
-                    """
+                prebuild_cursor = (
+                    self._conn.execute(
+                        """
+                        UPDATE archive_hours
+                        SET prebuild_status = 'pending',
+                            last_error = COALESCE(last_error, 'prebuild interrupted by restart'),
+                            error_count = error_count + 1
+                        WHERE prebuild_status = 'processing'
+                        """
+                    )
+                    if reset_prebuild
+                    else None
                 )
-                if reset_prebuild
-                else None
+            return (
+                0 if mirror_cursor is None else mirror_cursor.rowcount,
+                0 if process_cursor is None else process_cursor.rowcount,
+                0 if prebuild_cursor is None else prebuild_cursor.rowcount,
             )
-        return (
-            0 if mirror_cursor is None else mirror_cursor.rowcount,
-            0 if process_cursor is None else process_cursor.rowcount,
-            0 if prebuild_cursor is None else prebuild_cursor.rowcount,
-        )
+
+        return self._run_with_lock_retry(operation)
 
     def upsert_discovered_hour(
         self, filename: str, source_url: str, archive_page: int
     ) -> bool:
         hour = parse_archive_hour(filename).isoformat()
-        with self._conn:
-            cursor = self._conn.execute(
-                """
-                INSERT OR IGNORE INTO archive_hours (
-                    filename,
-                    hour,
-                    source_url,
-                    archive_page,
-                    discovered_at
-                ) VALUES (?, ?, ?, ?, ?)
-                """,
-                (filename, hour, source_url, archive_page, _utc_now()),
-            )
-            self._conn.execute(
-                """
-                UPDATE archive_hours
-                SET archive_page = ?, source_url = ?
-                WHERE filename = ?
-                """,
-                (archive_page, source_url, filename),
-            )
-        return cursor.rowcount > 0
+
+        def operation() -> bool:
+            with self._conn:
+                cursor = self._conn.execute(
+                    """
+                    INSERT OR IGNORE INTO archive_hours (
+                        filename,
+                        hour,
+                        source_url,
+                        archive_page,
+                        discovered_at
+                    ) VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (filename, hour, source_url, archive_page, _utc_now()),
+                )
+                self._conn.execute(
+                    """
+                    UPDATE archive_hours
+                    SET archive_page = ?, source_url = ?
+                    WHERE filename = ?
+                    """,
+                    (archive_page, source_url, filename),
+                )
+            return cursor.rowcount > 0
+
+        return self._run_with_lock_retry(operation)
 
     def list_hours_needing_mirror(self) -> list[sqlite3.Row]:
         cursor = self._conn.execute(
@@ -282,6 +378,25 @@ class RelayIndex:
         return cursor.fetchall()
 
     def mark_mirrored(
+        self,
+        filename: str,
+        *,
+        local_path: str,
+        etag: str | None,
+        content_length: int | None,
+        last_modified: str | None,
+    ) -> None:
+        self._run_with_lock_retry(
+            lambda: self._write_mark_mirrored(
+                filename,
+                local_path=local_path,
+                etag=etag,
+                content_length=content_length,
+                last_modified=last_modified,
+            )
+        )
+
+    def _write_mark_mirrored(
         self,
         filename: str,
         *,
@@ -321,8 +436,8 @@ class RelayIndex:
             )
 
     def mark_mirroring(self, filename: str) -> None:
-        with self._conn:
-            self._conn.execute(
+        self._run_with_lock_retry(
+            lambda: self._write_single_update(
                 """
                 UPDATE archive_hours
                 SET mirror_status = 'processing', last_error = NULL
@@ -330,10 +445,11 @@ class RelayIndex:
                 """,
                 (filename,),
             )
+        )
 
     def mark_mirror_error(self, filename: str, error: str) -> None:
-        with self._conn:
-            self._conn.execute(
+        self._run_with_lock_retry(
+            lambda: self._write_single_update(
                 """
                 UPDATE archive_hours
                 SET mirror_status = 'error',
@@ -343,6 +459,7 @@ class RelayIndex:
                 """,
                 (error, filename),
             )
+        )
 
     def list_hours_needing_process(
         self,
@@ -363,8 +480,8 @@ class RelayIndex:
         return cursor.fetchall()
 
     def mark_processing(self, filename: str) -> None:
-        with self._conn:
-            self._conn.execute(
+        self._run_with_lock_retry(
+            lambda: self._write_single_update(
                 """
                 UPDATE archive_hours
                 SET process_status = 'processing', last_error = NULL
@@ -372,10 +489,11 @@ class RelayIndex:
                 """,
                 (filename,),
             )
+        )
 
     def mark_process_error(self, filename: str, error: str) -> None:
-        with self._conn:
-            self._conn.execute(
+        self._run_with_lock_retry(
+            lambda: self._write_single_update(
                 """
                 UPDATE archive_hours
                 SET process_status = 'error',
@@ -385,65 +503,69 @@ class RelayIndex:
                 """,
                 (error, filename),
             )
+        )
 
     def replace_filtered_hours(
         self,
         filename: str,
         artifacts: list[FilteredHourArtifact],
     ) -> None:
-        with self._conn:
-            self._conn.execute(
-                "DELETE FROM filtered_hours WHERE filename = ?",
-                (filename,),
-            )
-            self._conn.executemany(
-                """
-                INSERT INTO filtered_hours (
-                    filename,
-                    hour,
-                    condition_id,
-                    token_id,
-                    local_path,
-                    row_count,
-                    byte_size,
-                    created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                [
-                    (
-                        artifact.filename,
-                        artifact.hour,
-                        artifact.condition_id,
-                        artifact.token_id,
-                        artifact.local_path,
-                        artifact.row_count,
-                        artifact.byte_size,
-                        _utc_now(),
-                    )
-                    for artifact in artifacts
-                ],
-            )
-            self._conn.execute(
-                """
-                UPDATE archive_hours
-                SET process_status = 'ready',
-                    prebuild_status = 'ready',
-                    processed_at = ?,
-                    prebuilt_at = ?,
-                    filtered_artifact_count = ?,
-                    last_error = NULL,
-                    error_count = 0
-                WHERE filename = ?
-                """,
-                (_utc_now(), _utc_now(), len(artifacts), filename),
-            )
+        def operation() -> None:
+            with self._conn:
+                self._conn.execute(
+                    "DELETE FROM filtered_hours WHERE filename = ?",
+                    (filename,),
+                )
+                self._conn.executemany(
+                    """
+                    INSERT INTO filtered_hours (
+                        filename,
+                        hour,
+                        condition_id,
+                        token_id,
+                        local_path,
+                        row_count,
+                        byte_size,
+                        created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    [
+                        (
+                            artifact.filename,
+                            artifact.hour,
+                            artifact.condition_id,
+                            artifact.token_id,
+                            artifact.local_path,
+                            artifact.row_count,
+                            artifact.byte_size,
+                            _utc_now(),
+                        )
+                        for artifact in artifacts
+                    ],
+                )
+                self._conn.execute(
+                    """
+                    UPDATE archive_hours
+                    SET process_status = 'ready',
+                        prebuild_status = 'ready',
+                        processed_at = ?,
+                        prebuilt_at = ?,
+                        filtered_artifact_count = ?,
+                        last_error = NULL,
+                        error_count = 0
+                    WHERE filename = ?
+                    """,
+                    (_utc_now(), _utc_now(), len(artifacts), filename),
+                )
+
+        self._run_with_lock_retry(operation)
 
     def mark_sharded(
         self,
         filename: str,
     ) -> None:
-        with self._conn:
-            self._conn.execute(
+        self._run_with_lock_retry(
+            lambda: self._write_single_update(
                 """
                 UPDATE archive_hours
                 SET process_status = 'ready',
@@ -454,10 +576,11 @@ class RelayIndex:
                 """,
                 (_utc_now(), filename),
             )
+        )
 
     def mark_prebuilding(self, filename: str) -> None:
-        with self._conn:
-            self._conn.execute(
+        self._run_with_lock_retry(
+            lambda: self._write_single_update(
                 """
                 UPDATE archive_hours
                 SET prebuild_status = 'processing',
@@ -466,10 +589,11 @@ class RelayIndex:
                 """,
                 (filename,),
             )
+        )
 
     def mark_prebuild_error(self, filename: str, error: str) -> None:
-        with self._conn:
-            self._conn.execute(
+        self._run_with_lock_retry(
+            lambda: self._write_single_update(
                 """
                 UPDATE archive_hours
                 SET prebuild_status = 'error',
@@ -479,6 +603,7 @@ class RelayIndex:
                 """,
                 (error, filename),
             )
+        )
 
     _PREBUILT_BATCH_SIZE = 5000
 
@@ -490,37 +615,19 @@ class RelayIndex:
         artifacts: list[FilteredHourArtifact] | None = None,
     ) -> None:
         if artifacts:
-            with self._conn:
-                self._conn.execute(
+            self._run_with_lock_retry(
+                lambda: self._write_single_update(
                     "DELETE FROM filtered_hours WHERE filename = ?",
                     (filename,),
                 )
+            )
             for offset in range(0, len(artifacts), self._PREBUILT_BATCH_SIZE):
                 batch = artifacts[offset : offset + self._PREBUILT_BATCH_SIZE]
-                with self._conn:
-                    self._conn.executemany(
-                        """
-                        INSERT INTO filtered_hours (
-                            filename, hour, condition_id, token_id,
-                            local_path, row_count, byte_size, created_at
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                        """,
-                        [
-                            (
-                                a.filename,
-                                a.hour,
-                                a.condition_id,
-                                a.token_id,
-                                a.local_path,
-                                a.row_count,
-                                a.byte_size,
-                                _utc_now(),
-                            )
-                            for a in batch
-                        ],
-                    )
-        with self._conn:
-            self._conn.execute(
+                self._run_with_lock_retry(
+                    lambda batch=batch: self._write_filtered_artifact_batch(batch)
+                )
+        self._run_with_lock_retry(
+            lambda: self._write_single_update(
                 """
                 UPDATE archive_hours
                 SET prebuild_status = 'ready',
@@ -531,6 +638,34 @@ class RelayIndex:
                 WHERE filename = ?
                 """,
                 (_utc_now(), filtered_artifact_count, filename),
+            )
+        )
+
+    def _write_filtered_artifact_batch(
+        self,
+        batch: list[FilteredHourArtifact],
+    ) -> None:
+        with self._conn:
+            self._conn.executemany(
+                """
+                INSERT INTO filtered_hours (
+                    filename, hour, condition_id, token_id,
+                    local_path, row_count, byte_size, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    (
+                        a.filename,
+                        a.hour,
+                        a.condition_id,
+                        a.token_id,
+                        a.local_path,
+                        a.row_count,
+                        a.byte_size,
+                        _utc_now(),
+                    )
+                    for a in batch
+                ],
             )
 
     def list_hours_needing_filtered_prebuild(self) -> list[sqlite3.Row]:
@@ -708,8 +843,8 @@ class RelayIndex:
         payload_json = (
             json.dumps(payload, sort_keys=True) if payload is not None else None
         )
-        with self._conn:
-            self._conn.execute(
+        inserted = self._run_with_lock_retry(
+            lambda: self._write_single_update(
                 """
                 INSERT INTO relay_events (
                     created_at,
@@ -721,11 +856,25 @@ class RelayIndex:
                 ) VALUES (?, ?, ?, ?, ?, ?)
                 """,
                 (_utc_now(), level, event_type, filename, message, payload_json),
-            )
+            ),
+            swallow_after_secs=10.0,
+            default=False,
+        )
+        if inserted is False:
+            return
         self._events_since_prune += 1
         prune_threshold = 1 if self._event_retention <= 250 else 250
         if self._events_since_prune >= prune_threshold:
-            self.prune_events()
+            self.prune_events(best_effort=True)
+
+    def _write_single_update(
+        self,
+        sql: str,
+        params: tuple[object, ...],
+    ) -> bool:
+        with self._conn:
+            self._conn.execute(sql, params)
+        return True
 
     def recent_events(self, *, limit: int = 100) -> list[sqlite3.Row]:
         cursor = self._conn.execute(

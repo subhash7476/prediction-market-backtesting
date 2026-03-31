@@ -96,7 +96,7 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "stats":
         index = RelayIndex(config.db_path)
-        index.initialize()
+        index.initialize(apply_maintenance=False)
         print(json.dumps(index.stats(), indent=2, sort_keys=True))
         return 0
 

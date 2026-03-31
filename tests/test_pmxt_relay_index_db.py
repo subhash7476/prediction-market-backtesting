@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import UTC
 from datetime import datetime
 from pathlib import Path
+import sqlite3
 
 from pmxt_relay.index_db import FilteredHourArtifact, RelayIndex
 
@@ -316,6 +317,80 @@ def test_latest_prebuild_progress_returns_latest_progress_event(tmp_path: Path):
     assert progress.processed_rows == 512
     assert progress.total_rows == 2048
     assert progress.created_at is not None
+
+
+def test_lock_retry_retries_until_success(tmp_path: Path, monkeypatch) -> None:
+    index = RelayIndex(tmp_path / "relay.sqlite3")
+    attempts = 0
+
+    monkeypatch.setattr("pmxt_relay.index_db.time.sleep", lambda _: None)
+
+    def flaky_operation() -> str:
+        nonlocal attempts
+        attempts += 1
+        if attempts < 3:
+            raise sqlite3.OperationalError("database is locked")
+        return "ok"
+
+    assert index._run_with_lock_retry(flaky_operation) == "ok"  # noqa: SLF001
+    assert attempts == 3
+
+
+def test_lock_retry_can_drop_best_effort_writes(tmp_path: Path, monkeypatch) -> None:
+    index = RelayIndex(tmp_path / "relay.sqlite3")
+    now = 0.0
+
+    def fake_monotonic() -> float:
+        return now
+
+    def fake_sleep(delay: float) -> None:
+        nonlocal now
+        now += delay
+
+    monkeypatch.setattr("pmxt_relay.index_db.time.monotonic", fake_monotonic)
+    monkeypatch.setattr("pmxt_relay.index_db.time.sleep", fake_sleep)
+
+    def always_locked() -> None:
+        raise sqlite3.OperationalError("database is locked")
+
+    dropped = index._run_with_lock_retry(  # noqa: SLF001
+        always_locked,
+        swallow_after_secs=0.2,
+        default=False,
+    )
+
+    assert dropped is False
+
+
+def test_initialize_without_maintenance_skips_startup_write_work(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    db_path = tmp_path / "relay.sqlite3"
+    index = RelayIndex(db_path)
+    index.initialize()
+    index.upsert_discovered_hour(
+        "polymarket_orderbook_2026-03-21T12.parquet",
+        "https://r2.pmxt.dev/polymarket_orderbook_2026-03-21T12.parquet",
+        1,
+    )
+    index.mark_mirroring("polymarket_orderbook_2026-03-21T12.parquet")
+
+    reopened = RelayIndex(db_path)
+
+    def fail_prune(*, best_effort: bool = False) -> None:
+        raise AssertionError("initialize(apply_maintenance=False) should not prune")
+
+    monkeypatch.setattr(reopened, "prune_events", fail_prune)
+
+    reset_counts = reopened.initialize(
+        apply_maintenance=False,
+        reset_inflight=True,
+    )
+
+    assert reset_counts == (0, 0, 0)
+    queue = reopened.queue_summary()
+    assert queue["mirror_processing"] == 1
 
 
 def test_error_count_deprioritizes_but_never_abandons(tmp_path: Path):

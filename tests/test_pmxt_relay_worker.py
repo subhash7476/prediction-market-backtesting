@@ -95,3 +95,30 @@ def test_mirror_hour_falls_back_to_get_when_head_is_rejected(
     events = worker._index.recent_events(limit=10)  # noqa: SLF001
     assert any(row["event_type"] == "mirror_head_error" for row in events)
     assert any(row["event_type"] == "mirror_complete" for row in events)
+
+
+def test_progress_reporting_requires_large_row_delta_or_completion(
+    tmp_path: Path,
+) -> None:
+    worker = RelayWorker(_make_config(tmp_path), reset_inflight=False)
+
+    assert worker._should_report_progress(  # noqa: SLF001
+        processed_rows=0,
+        total_rows=10,
+        last_reported_rows=-1,
+    )
+    assert not worker._should_report_progress(  # noqa: SLF001
+        processed_rows=123_456,
+        total_rows=10_000_000,
+        last_reported_rows=0,
+    )
+    assert worker._should_report_progress(  # noqa: SLF001
+        processed_rows=5_000_000,
+        total_rows=10_000_000,
+        last_reported_rows=0,
+    )
+    assert worker._should_report_progress(  # noqa: SLF001
+        processed_rows=10_000_000,
+        total_rows=10_000_000,
+        last_reported_rows=5_000_000,
+    )
