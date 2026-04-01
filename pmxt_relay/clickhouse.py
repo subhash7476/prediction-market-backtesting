@@ -46,11 +46,11 @@ class ClickHouseRelay:
     def _http_url(self) -> str:
         return self._config.clickhouse_url
 
-    def _request_url(self) -> str:
-        return (
-            f"{self._http_url}/?database={self._database}"
-            "&date_time_input_format=best_effort"
-        )
+    def _request_url(self, *, use_database: bool = True) -> str:
+        query_params = ["date_time_input_format=best_effort"]
+        if use_database:
+            query_params.insert(0, f"database={self._database}")
+        return f"{self._http_url}/?{'&'.join(query_params)}"
 
     def _request_headers(self) -> dict[str, str]:
         headers = {"User-Agent": "pmxt-relay/1.0"}
@@ -64,9 +64,15 @@ class ClickHouseRelay:
     def _escape(value: str) -> str:
         return value.replace("\\", "\\\\").replace("'", "\\'")
 
-    def _execute_query(self, query: str, *, data: bytes | None = None) -> bytes:
+    def _execute_query(
+        self,
+        query: str,
+        *,
+        data: bytes | None = None,
+        use_database: bool = True,
+    ) -> bytes:
         request = Request(
-            self._request_url(),
+            self._request_url(use_database=use_database),
             data=(query.encode() + b"\n" + data)
             if data is not None
             else query.encode(),
@@ -85,7 +91,10 @@ class ClickHouseRelay:
             ) from exc
 
     def ensure_schema(self) -> None:
-        self._execute_query(f"CREATE DATABASE IF NOT EXISTS {self._database}")
+        self._execute_query(
+            f"CREATE DATABASE IF NOT EXISTS {self._database}",
+            use_database=False,
+        )
         self._execute_query(
             f"""
             CREATE TABLE IF NOT EXISTS {self._database}.{self._table} (
