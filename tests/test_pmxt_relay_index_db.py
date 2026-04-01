@@ -319,6 +319,26 @@ def test_latest_prebuild_progress_returns_latest_progress_event(tmp_path: Path):
     assert progress.created_at is not None
 
 
+def test_latest_prebuild_progress_accepts_process_progress_events(tmp_path: Path):
+    index = RelayIndex(tmp_path / "relay.sqlite3")
+    index.initialize()
+
+    index.log_event(
+        level="INFO",
+        event_type="process_progress",
+        filename="polymarket_orderbook_2026-03-21T13.parquet",
+        message="latest process progress",
+        payload={"processed_rows": 768, "total_rows": 4096},
+    )
+
+    progress = index.latest_prebuild_progress()
+
+    assert progress is not None
+    assert progress.filename == "polymarket_orderbook_2026-03-21T13.parquet"
+    assert progress.processed_rows == 768
+    assert progress.total_rows == 4096
+
+
 def test_lock_retry_retries_until_success(tmp_path: Path, monkeypatch) -> None:
     index = RelayIndex(tmp_path / "relay.sqlite3")
     attempts = 0

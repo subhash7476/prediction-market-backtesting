@@ -380,8 +380,8 @@ def _prebuild_file_badge_payload(
     stats: dict[str, int | str | None],
     progress: PrebuildProgress | None,
 ) -> dict[str, object]:
-    prebuilding_hours = int(stats.get("prebuilding_hours") or 0)
-    if prebuilding_hours <= 0:
+    processing_hours = int(stats.get("processing_hours") or 0)
+    if processing_hours <= 0:
         return _badge_payload(label="PMXT file", message="idle", color="lightgrey")
     if progress is None:
         return _badge_payload(label="PMXT file", message="starting", color="yellow")
@@ -397,8 +397,8 @@ def _prebuild_progress_badge_payload(
     stats: dict[str, int | str | None],
     progress: PrebuildProgress | None,
 ) -> dict[str, object]:
-    prebuilding_hours = int(stats.get("prebuilding_hours") or 0)
-    if prebuilding_hours <= 0:
+    processing_hours = int(stats.get("processing_hours") or 0)
+    if processing_hours <= 0:
         return _badge_payload(label="PMXT rows", message="idle", color="lightgrey")
     if progress is None:
         return _badge_payload(label="PMXT rows", message="starting", color="yellow")

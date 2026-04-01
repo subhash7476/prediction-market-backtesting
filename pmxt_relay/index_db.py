@@ -893,7 +893,7 @@ class RelayIndex:
             """
             SELECT created_at, filename, payload_json
             FROM relay_events
-            WHERE event_type = 'filtered_prebuild_progress'
+            WHERE event_type IN ('filtered_prebuild_progress', 'process_progress')
             ORDER BY id DESC
             LIMIT 1
             """

@@ -457,6 +457,68 @@ def test_badge_svg_endpoints_return_svg(tmp_path: Path):
     asyncio.run(scenario())
 
 
+def test_prebuild_badges_follow_process_progress_when_worker_is_active(tmp_path: Path):
+    async def scenario() -> None:
+        config = _make_config(tmp_path)
+        config.ensure_directories()
+        filename = "polymarket_orderbook_2026-03-21T13.parquet"
+
+        app = create_app(config)
+        index = app[INDEX_APP_KEY]
+        index.upsert_discovered_hour(
+            filename,
+            f"https://r2.pmxt.dev/{filename}",
+            1,
+        )
+        index.mark_mirrored(
+            filename,
+            local_path="/tmp/raw.parquet",
+            etag=None,
+            content_length=None,
+            last_modified=None,
+        )
+        index.mark_processing(filename)
+        index.log_event(
+            level="INFO",
+            event_type="process_progress",
+            filename=filename,
+            message="Process progress for current hour",
+            payload={
+                "processed_rows": 123456,
+                "total_rows": 654321,
+            },
+        )
+
+        server = TestServer(app)
+        client = TestClient(server)
+        await client.start_server()
+        try:
+            prebuild_file_response = await client.get("/v1/badge/prebuild-file")
+            assert prebuild_file_response.status == 200
+            prebuild_file_payload = await prebuild_file_response.json()
+
+            prebuild_progress_response = await client.get("/v1/badge/prebuild-progress")
+            assert prebuild_progress_response.status == 200
+            prebuild_progress_payload = await prebuild_progress_response.json()
+        finally:
+            await client.close()
+
+        assert prebuild_file_payload == {
+            "schemaVersion": 1,
+            "label": "PMXT file",
+            "message": filename,
+            "color": "blue",
+        }
+        assert prebuild_progress_payload == {
+            "schemaVersion": 1,
+            "label": "PMXT rows",
+            "message": "123,456 / 654,321",
+            "color": "yellowgreen",
+        }
+
+    asyncio.run(scenario())
+
+
 def test_system_endpoints_return_live_metrics_and_svg(tmp_path: Path):
     async def scenario() -> None:
         config = _make_config(tmp_path)
