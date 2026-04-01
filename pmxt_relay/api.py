@@ -996,19 +996,37 @@ def _service_metrics_for_badge(
     return service_metrics
 
 
+def _single_service_metrics(service_key: str) -> dict[str, object] | None:
+    spec = _SYSTEM_SERVICE_SPECS.get(service_key)
+    if spec is None:
+        return None
+    service_name, label = spec
+    state = _read_systemd_service_state(service_name)
+    raw_pid = state.get("MainPID", "0").strip()
+    try:
+        pid = max(0, int(raw_pid))
+    except ValueError:
+        pid = 0
+    return {
+        "service_name": service_name,
+        "label": label,
+        "active_state": state.get("ActiveState", "unknown"),
+        "sub_state": state.get("SubState", "unknown"),
+        "pid": pid,
+    }
+
+
 async def badge_api_svg(request: web.Request) -> web.Response:
-    config = request.app[CONFIG_APP_KEY]
-    metrics = await asyncio.to_thread(_system_metrics_snapshot, config)
     return _badge_svg_response(
-        _service_badge_payload(_service_metrics_for_badge(metrics, "api"))
+        _service_badge_payload(await asyncio.to_thread(_single_service_metrics, "api"))
     )
 
 
 async def badge_worker_svg(request: web.Request) -> web.Response:
-    config = request.app[CONFIG_APP_KEY]
-    metrics = await asyncio.to_thread(_system_metrics_snapshot, config)
     return _badge_svg_response(
-        _service_badge_payload(_service_metrics_for_badge(metrics, "worker"))
+        _service_badge_payload(
+            await asyncio.to_thread(_single_service_metrics, "worker")
+        )
     )
 
 
@@ -1041,10 +1059,10 @@ async def badge_processing_svg(request: web.Request) -> web.Response:
 
 
 async def badge_clickhouse_svg(request: web.Request) -> web.Response:
-    config = request.app[CONFIG_APP_KEY]
-    metrics = await asyncio.to_thread(_system_metrics_snapshot, config)
     return _badge_svg_response(
-        _service_badge_payload(_service_metrics_for_badge(metrics, "clickhouse"))
+        _service_badge_payload(
+            await asyncio.to_thread(_single_service_metrics, "clickhouse")
+        )
     )
 
 

@@ -595,40 +595,62 @@ def test_system_endpoints_return_live_metrics_and_svg(tmp_path: Path):
         client = TestClient(server)
         await client.start_server()
         try:
-            with patch(
-                "pmxt_relay.api._system_metrics_snapshot",
-                return_value={
-                    "cpu_percent": 12.5,
-                    "mem_percent": 34.0,
-                    "disk_percent": 56.5,
-                    "iowait_percent": 7.5,
-                    "services": {
-                        "api": {
-                            "service_name": "pmxt-relay-api.service",
-                            "label": "API service",
-                            "active_state": "active",
-                            "sub_state": "running",
-                            "pid": 111,
-                            "cpu_percent": 1.5,
-                        },
-                        "worker": {
-                            "service_name": "pmxt-relay-worker.service",
-                            "label": "Worker service",
-                            "active_state": "active",
-                            "sub_state": "running",
-                            "pid": 222,
-                            "cpu_percent": 18.0,
-                        },
-                        "clickhouse": {
-                            "service_name": "clickhouse-server.service",
-                            "label": "ClickHouse",
-                            "active_state": "active",
-                            "sub_state": "running",
-                            "pid": 333,
-                            "cpu_percent": 62.5,
+            with (
+                patch(
+                    "pmxt_relay.api._system_metrics_snapshot",
+                    return_value={
+                        "cpu_percent": 12.5,
+                        "mem_percent": 34.0,
+                        "disk_percent": 56.5,
+                        "iowait_percent": 7.5,
+                        "services": {
+                            "api": {
+                                "service_name": "pmxt-relay-api.service",
+                                "label": "API service",
+                                "active_state": "active",
+                                "sub_state": "running",
+                                "pid": 111,
+                                "cpu_percent": 1.5,
+                            },
+                            "worker": {
+                                "service_name": "pmxt-relay-worker.service",
+                                "label": "Worker service",
+                                "active_state": "active",
+                                "sub_state": "running",
+                                "pid": 222,
+                                "cpu_percent": 18.0,
+                            },
+                            "clickhouse": {
+                                "service_name": "clickhouse-server.service",
+                                "label": "ClickHouse",
+                                "active_state": "active",
+                                "sub_state": "running",
+                                "pid": 333,
+                                "cpu_percent": 62.5,
+                            },
                         },
                     },
-                },
+                ),
+                patch(
+                    "pmxt_relay.api._read_systemd_service_state",
+                    side_effect=[
+                        {
+                            "MainPID": "111",
+                            "ActiveState": "active",
+                            "SubState": "running",
+                        },
+                        {
+                            "MainPID": "222",
+                            "ActiveState": "active",
+                            "SubState": "running",
+                        },
+                        {
+                            "MainPID": "333",
+                            "ActiveState": "active",
+                            "SubState": "running",
+                        },
+                    ],
+                ),
             ):
                 metrics_response = await client.get("/v1/system")
                 assert metrics_response.status == 200
@@ -754,9 +776,7 @@ def test_stage_badges_show_live_mirror_and_process_activity(tmp_path: Path):
     asyncio.run(scenario())
 
 
-def test_worker_badge_shows_running_busy_when_cpu_sample_is_zero(
-    tmp_path: Path,
-):
+def test_worker_badge_shows_running_busy_from_service_state(tmp_path: Path):
     async def scenario() -> None:
         config = _make_config(tmp_path)
         config.ensure_directories()
@@ -767,38 +787,11 @@ def test_worker_badge_shows_running_busy_when_cpu_sample_is_zero(
         await client.start_server()
         try:
             with patch(
-                "pmxt_relay.api._system_metrics_snapshot",
+                "pmxt_relay.api._read_systemd_service_state",
                 return_value={
-                    "cpu_percent": 12.5,
-                    "mem_percent": 34.0,
-                    "disk_percent": 56.5,
-                    "iowait_percent": 7.5,
-                    "services": {
-                        "api": {
-                            "service_name": "pmxt-relay-api.service",
-                            "label": "API service",
-                            "active_state": "active",
-                            "sub_state": "running",
-                            "pid": 111,
-                            "cpu_percent": 1.5,
-                        },
-                        "worker": {
-                            "service_name": "pmxt-relay-worker.service",
-                            "label": "Worker service",
-                            "active_state": "active",
-                            "sub_state": "running",
-                            "pid": 222,
-                            "cpu_percent": 0.0,
-                        },
-                        "clickhouse": {
-                            "service_name": "clickhouse-server.service",
-                            "label": "ClickHouse",
-                            "active_state": "active",
-                            "sub_state": "running",
-                            "pid": 333,
-                            "cpu_percent": 62.5,
-                        },
-                    },
+                    "MainPID": "222",
+                    "ActiveState": "active",
+                    "SubState": "running",
                 },
             ):
                 worker_badge = await client.get("/v1/badge/worker.svg")
