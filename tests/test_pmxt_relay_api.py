@@ -340,49 +340,49 @@ def test_badge_endpoints_return_shields_payloads(tmp_path: Path):
         }
         assert backfill_payload == {
             "schemaVersion": 1,
-            "label": "PMXT backfill",
+            "label": "Hours backfilled",
             "message": "1/2 hrs",
             "color": "green",
         }
         assert mirrored_payload == {
             "schemaVersion": 1,
-            "label": "PMXT mirrored",
+            "label": "Hours mirrored",
             "message": "2/2 hrs",
             "color": "brightgreen",
         }
         assert processed_payload == {
             "schemaVersion": 1,
-            "label": "PMXT processed",
+            "label": "Hours processed",
             "message": "1/2 hrs",
             "color": "green",
         }
         assert latest_payload == {
             "schemaVersion": 1,
-            "label": "PMXT latest",
+            "label": "Latest hour",
             "message": "2026-03-21T12Z",
             "color": "blue",
         }
         assert lag_payload == {
             "schemaVersion": 1,
-            "label": "PMXT lag",
+            "label": "Queue lag",
             "message": "1 hrs",
             "color": "green",
         }
         assert rate_payload == {
             "schemaVersion": 1,
-            "label": "PMXT rate",
+            "label": "Completion rate",
             "message": "0.04 hr/hr",
             "color": "orange",
         }
         assert file_payload == {
             "schemaVersion": 1,
-            "label": "PMXT file",
+            "label": "Current file",
             "message": processing_filename,
             "color": "blue",
         }
         assert rows_payload == {
             "schemaVersion": 1,
-            "label": "PMXT rows",
+            "label": "Rows processed",
             "message": "10,682,368 / 21,454,016",
             "color": "yellowgreen",
         }
@@ -446,9 +446,9 @@ def test_badge_svg_endpoints_return_svg(tmp_path: Path):
         assert "PMXT relay" in svg_payloads["/v1/badge/status.svg"]
         assert "processing" in svg_payloads["/v1/badge/status.svg"]
         assert "<svg" in svg_payloads["/v1/badge/status.svg"]
-        assert "PMXT mirrored" in svg_payloads["/v1/badge/mirrored.svg"]
-        assert "PMXT processed" in svg_payloads["/v1/badge/processed.svg"]
-        assert "PMXT rate" in svg_payloads["/v1/badge/rate.svg"]
+        assert "Hours mirrored" in svg_payloads["/v1/badge/mirrored.svg"]
+        assert "Hours processed" in svg_payloads["/v1/badge/processed.svg"]
+        assert "Completion rate" in svg_payloads["/v1/badge/rate.svg"]
         assert filename in svg_payloads["/v1/badge/file.svg"]
         assert "10,682,368 / 21,454,016" in svg_payloads["/v1/badge/rows.svg"]
 
@@ -505,13 +505,13 @@ def test_file_and_rows_badges_follow_process_progress_when_worker_is_active(
 
         assert file_payload == {
             "schemaVersion": 1,
-            "label": "PMXT file",
+            "label": "Current file",
             "message": filename,
             "color": "blue",
         }
         assert rows_payload == {
             "schemaVersion": 1,
-            "label": "PMXT rows",
+            "label": "Rows processed",
             "message": "123,456 / 654,321",
             "color": "yellowgreen",
         }
@@ -571,13 +571,13 @@ def test_file_and_rows_badges_ignore_stale_progress_from_previous_hour(
 
         assert file_payload == {
             "schemaVersion": 1,
-            "label": "PMXT file",
+            "label": "Current file",
             "message": current_filename,
             "color": "blue",
         }
         assert rows_payload == {
             "schemaVersion": 1,
-            "label": "PMXT rows",
+            "label": "Rows processed",
             "message": "starting",
             "color": "yellow",
         }
@@ -605,7 +605,7 @@ def test_system_endpoints_return_live_metrics_and_svg(tmp_path: Path):
                     "services": {
                         "api": {
                             "service_name": "pmxt-relay-api.service",
-                            "label": "Relay API",
+                            "label": "API service",
                             "active_state": "active",
                             "sub_state": "running",
                             "pid": 111,
@@ -613,7 +613,7 @@ def test_system_endpoints_return_live_metrics_and_svg(tmp_path: Path):
                         },
                         "worker": {
                             "service_name": "pmxt-relay-worker.service",
-                            "label": "Relay worker",
+                            "label": "Worker service",
                             "active_state": "active",
                             "sub_state": "running",
                             "pid": 222,
@@ -669,7 +669,7 @@ def test_system_endpoints_return_live_metrics_and_svg(tmp_path: Path):
             "services": {
                 "api": {
                     "service_name": "pmxt-relay-api.service",
-                    "label": "Relay API",
+                    "label": "API service",
                     "active_state": "active",
                     "sub_state": "running",
                     "pid": 111,
@@ -677,7 +677,7 @@ def test_system_endpoints_return_live_metrics_and_svg(tmp_path: Path):
                 },
                 "worker": {
                     "service_name": "pmxt-relay-worker.service",
-                    "label": "Relay worker",
+                    "label": "Worker service",
                     "active_state": "active",
                     "sub_state": "running",
                     "pid": 222,
@@ -693,13 +693,13 @@ def test_system_endpoints_return_live_metrics_and_svg(tmp_path: Path):
                 },
             },
         }
-        assert "Relay load" in cpu_svg and "12.5%" in cpu_svg
-        assert "Relay load" in load_svg and "12.5%" in load_svg
-        assert "Relay mem" in mem_svg and "34.0%" in mem_svg
-        assert "Relay disk" in disk_svg and "56.5%" in disk_svg
+        assert "CPU load" in cpu_svg and "12.5%" in cpu_svg
+        assert "CPU load" in load_svg and "12.5%" in load_svg
+        assert "RAM" in mem_svg and "34.0%" in mem_svg
+        assert "Disk" in disk_svg and "56.5%" in disk_svg
         assert "I/O wait" in iowait_svg and "7.5%" in iowait_svg
-        assert "Relay API" in api_svg and "running 1.5%" in api_svg
-        assert "Relay worker" in worker_svg and "running 18.0%" in worker_svg
+        assert "API service" in api_svg and "running 1.5%" in api_svg
+        assert "Worker service" in worker_svg and "running 18.0%" in worker_svg
         assert "ClickHouse" in clickhouse_svg and "running 62.5%" in clickhouse_svg
 
     asyncio.run(scenario())
@@ -748,7 +748,7 @@ def test_stage_badges_show_live_mirror_and_process_activity(tmp_path: Path):
         finally:
             await client.close()
 
-        assert "Mirroring" in mirroring_svg and "active 1" in mirroring_svg
+        assert "Mirror service" in mirroring_svg and "active 1" in mirroring_svg
         assert "Processing" in processing_svg and "active 1" in processing_svg
 
     asyncio.run(scenario())

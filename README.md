@@ -19,26 +19,27 @@
 
 Relay VPS statistics:
 
-[![PMXT relay](https://209-209-10-83.sslip.io/v1/badge/status.svg)](https://209-209-10-83.sslip.io/v1/stats)
-[![Relay load](https://209-209-10-83.sslip.io/v1/badge/load.svg)](https://209-209-10-83.sslip.io/v1/system)
-[![I/O wait](https://209-209-10-83.sslip.io/v1/badge/iowait.svg)](https://209-209-10-83.sslip.io/v1/system)
-[![Relay mem](https://209-209-10-83.sslip.io/v1/badge/mem.svg)](https://209-209-10-83.sslip.io/v1/system)
-[![Relay disk](https://209-209-10-83.sslip.io/v1/badge/disk.svg)](https://209-209-10-83.sslip.io/v1/system)
+[![PMXT relay](https://209-209-10-83.sslip.io/v1/badge/status.svg?v=4)](https://209-209-10-83.sslip.io/v1/stats)
+[![Processing](https://209-209-10-83.sslip.io/v1/badge/processing.svg?v=4)](https://209-209-10-83.sslip.io/v1/queue)
+[![CPU load](https://209-209-10-83.sslip.io/v1/badge/load.svg?v=4)](https://209-209-10-83.sslip.io/v1/system)
+[![I/O wait](https://209-209-10-83.sslip.io/v1/badge/iowait.svg?v=4)](https://209-209-10-83.sslip.io/v1/system)
+[![RAM](https://209-209-10-83.sslip.io/v1/badge/mem.svg?v=4)](https://209-209-10-83.sslip.io/v1/system)
+[![Disk](https://209-209-10-83.sslip.io/v1/badge/disk.svg?v=4)](https://209-209-10-83.sslip.io/v1/system)
 
-[![Relay API](https://209-209-10-83.sslip.io/v1/badge/api.svg)](https://209-209-10-83.sslip.io/v1/system)
-[![Relay worker](https://209-209-10-83.sslip.io/v1/badge/worker.svg)](https://209-209-10-83.sslip.io/v1/system)
-[![Mirroring](https://209-209-10-83.sslip.io/v1/badge/mirroring.svg)](https://209-209-10-83.sslip.io/v1/queue)
-[![Processing](https://209-209-10-83.sslip.io/v1/badge/processing.svg)](https://209-209-10-83.sslip.io/v1/queue)
-[![ClickHouse](https://209-209-10-83.sslip.io/v1/badge/clickhouse.svg)](https://209-209-10-83.sslip.io/v1/system)
+[![API service](https://209-209-10-83.sslip.io/v1/badge/api.svg?v=4)](https://209-209-10-83.sslip.io/v1/system)
+[![Worker service](https://209-209-10-83.sslip.io/v1/badge/worker.svg?v=4)](https://209-209-10-83.sslip.io/v1/system)
+[![Mirror service](https://209-209-10-83.sslip.io/v1/badge/mirroring.svg?v=4)](https://209-209-10-83.sslip.io/v1/queue)
+[![ClickHouse](https://209-209-10-83.sslip.io/v1/badge/clickhouse.svg?v=4)](https://209-209-10-83.sslip.io/v1/system)
 
-[![PMXT mirrored](https://209-209-10-83.sslip.io/v1/badge/mirrored.svg)](https://209-209-10-83.sslip.io/v1/stats)
-[![PMXT processed](https://209-209-10-83.sslip.io/v1/badge/processed.svg)](https://209-209-10-83.sslip.io/v1/stats)
-[![PMXT latest](https://209-209-10-83.sslip.io/v1/badge/latest.svg?v=3)](https://209-209-10-83.sslip.io/v1/queue)
-[![PMXT lag](https://209-209-10-83.sslip.io/v1/badge/lag.svg?v=3)](https://209-209-10-83.sslip.io/v1/queue)
-[![PMXT rate](https://209-209-10-83.sslip.io/v1/badge/rate.svg?v=1)](https://209-209-10-83.sslip.io/v1/stats)
+[![Hours mirrored](https://209-209-10-83.sslip.io/v1/badge/mirrored.svg?v=4)](https://209-209-10-83.sslip.io/v1/stats)
+[![Hours processed](https://209-209-10-83.sslip.io/v1/badge/processed.svg?v=4)](https://209-209-10-83.sslip.io/v1/stats)
+[![Queue lag](https://209-209-10-83.sslip.io/v1/badge/lag.svg?v=4)](https://209-209-10-83.sslip.io/v1/queue)
+[![Completion rate](https://209-209-10-83.sslip.io/v1/badge/rate.svg?v=4)](https://209-209-10-83.sslip.io/v1/stats)
+[![Latest hour](https://209-209-10-83.sslip.io/v1/badge/latest.svg?v=4)](https://209-209-10-83.sslip.io/v1/queue)
 
-[![PMXT file](https://209-209-10-83.sslip.io/v1/badge/file.svg?v=1)](https://209-209-10-83.sslip.io/v1/events?limit=50)
-[![PMXT rows](https://209-209-10-83.sslip.io/v1/badge/rows.svg?v=1)](https://209-209-10-83.sslip.io/v1/events?limit=50)
+
+[![Current file](https://209-209-10-83.sslip.io/v1/badge/file.svg?v=4)](https://209-209-10-83.sslip.io/v1/events?limit=50)
+[![Rows processed](https://209-209-10-83.sslip.io/v1/badge/rows.svg?v=4)](https://209-209-10-83.sslip.io/v1/events?limit=50)
 
 Backtesting framework for prediction market strategies on
 [Kalshi](https://kalshi.com) and [Polymarket](https://polymarket.com), built on

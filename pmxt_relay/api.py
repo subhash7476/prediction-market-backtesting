@@ -54,8 +54,8 @@ _BADGE_COLOR_HEX = {
 _SYSTEM_METRICS_CACHE_TTL_SECS = 2.0
 _SYSTEM_METRICS_SAMPLE_SECS = 0.2
 _SYSTEM_SERVICE_SPECS = {
-    "api": ("pmxt-relay-api.service", "Relay API"),
-    "worker": ("pmxt-relay-worker.service", "Relay worker"),
+    "api": ("pmxt-relay-api.service", "API service"),
+    "worker": ("pmxt-relay-worker.service", "Worker service"),
     "clickhouse": ("clickhouse-server.service", "ClickHouse"),
 }
 _SYSTEM_METRICS_CACHE_LOCK = threading.Lock()
@@ -472,11 +472,11 @@ def _backfill_badge_payload(
 
     if archive_hours <= 0:
         return _badge_payload(
-            label="PMXT backfill", message="0/0 hrs", color="lightgrey"
+            label="Hours backfilled", message="0/0 hrs", color="lightgrey"
         )
 
     return _badge_payload(
-        label="PMXT backfill",
+        label="Hours backfilled",
         message=f"{processed_hours}/{archive_hours} hrs",
         color=_progress_color(numerator=processed_hours, denominator=archive_hours),
     )
@@ -505,7 +505,7 @@ def _mirrored_badge_payload(
     mirrored_hours = int(stats.get("mirrored_hours") or 0)
     archive_hours = int(stats.get("archive_hours") or 0)
     return _ratio_badge_payload(
-        label="PMXT mirrored",
+        label="Hours mirrored",
         numerator=mirrored_hours,
         denominator=archive_hours,
     )
@@ -518,7 +518,7 @@ def _processed_badge_payload(
     processed_hours = int(stats.get("processed_hours") or 0)
     mirrored_hours = int(stats.get("mirrored_hours") or 0)
     return _ratio_badge_payload(
-        label="PMXT processed",
+        label="Hours processed",
         numerator=processed_hours,
         denominator=mirrored_hours,
     )
@@ -533,7 +533,7 @@ def _latest_processed_badge_payload(
         latest_processed_hour if isinstance(latest_processed_hour, str) else None
     )
     return _badge_payload(
-        label="PMXT latest",
+        label="Latest hour",
         message=_short_hour_label(latest_label),
         color="blue",
     )
@@ -557,7 +557,7 @@ def _lag_badge_payload(
         color = "orange"
 
     return _badge_payload(
-        label="PMXT lag",
+        label="Queue lag",
         message=f"{lag_hours} hrs",
         color=color,
     )
@@ -587,7 +587,7 @@ def _rate_badge_payload(
         message = f"{rate:.2f} hr/hr"
 
     return _badge_payload(
-        label="PMXT rate",
+        label="Completion rate",
         message=message,
         color=color,
     )
@@ -601,17 +601,17 @@ def _file_badge_payload(
 ) -> dict[str, object]:
     processing_hours = int(stats.get("processing_hours") or 0)
     if processing_hours <= 0:
-        return _badge_payload(label="PMXT file", message="idle", color="lightgrey")
+        return _badge_payload(label="Current file", message="idle", color="lightgrey")
     if current_filename is not None:
         return _badge_payload(
-            label="PMXT file",
+            label="Current file",
             message=current_filename,
             color="blue",
         )
     if progress is None:
-        return _badge_payload(label="PMXT file", message="starting", color="yellow")
+        return _badge_payload(label="Current file", message="starting", color="yellow")
     return _badge_payload(
-        label="PMXT file",
+        label="Current file",
         message=progress.filename,
         color="blue",
     )
@@ -625,13 +625,17 @@ def _rows_badge_payload(
 ) -> dict[str, object]:
     processing_hours = int(stats.get("processing_hours") or 0)
     if processing_hours <= 0:
-        return _badge_payload(label="PMXT rows", message="idle", color="lightgrey")
+        return _badge_payload(label="Rows processed", message="idle", color="lightgrey")
     if progress is None:
-        return _badge_payload(label="PMXT rows", message="starting", color="yellow")
+        return _badge_payload(
+            label="Rows processed", message="starting", color="yellow"
+        )
     if current_filename is not None and progress.filename != current_filename:
-        return _badge_payload(label="PMXT rows", message="starting", color="yellow")
+        return _badge_payload(
+            label="Rows processed", message="starting", color="yellow"
+        )
     return _badge_payload(
-        label="PMXT rows",
+        label="Rows processed",
         message=f"{progress.processed_rows:,} / {progress.total_rows:,}",
         color=_progress_color(
             numerator=progress.processed_rows,
@@ -948,7 +952,7 @@ async def badge_cpu_svg(request: web.Request) -> web.Response:
     config = request.app[CONFIG_APP_KEY]
     metrics = await asyncio.to_thread(_system_metrics_snapshot, config)
     return _badge_svg_response(
-        _system_badge_payload("Relay load", float(metrics["cpu_percent"]))
+        _system_badge_payload("CPU load", float(metrics["cpu_percent"]))
     )
 
 
@@ -956,7 +960,7 @@ async def badge_mem_svg(request: web.Request) -> web.Response:
     config = request.app[CONFIG_APP_KEY]
     metrics = await asyncio.to_thread(_system_metrics_snapshot, config)
     return _badge_svg_response(
-        _system_badge_payload("Relay mem", float(metrics["mem_percent"]))
+        _system_badge_payload("RAM", float(metrics["mem_percent"]))
     )
 
 
@@ -964,7 +968,7 @@ async def badge_disk_svg(request: web.Request) -> web.Response:
     config = request.app[CONFIG_APP_KEY]
     metrics = await asyncio.to_thread(_system_metrics_snapshot, config)
     return _badge_svg_response(
-        _system_badge_payload("Relay disk", float(metrics["disk_percent"]))
+        _system_badge_payload("Disk", float(metrics["disk_percent"]))
     )
 
 
@@ -1014,7 +1018,7 @@ async def badge_mirroring_svg(request: web.Request) -> web.Response:
     queue = index.queue_summary()
     return _badge_svg_response(
         _stage_badge_payload(
-            label="Mirroring",
+            label="Mirror service",
             active_count=int(queue.get("mirror_processing") or 0),
             queued_count=int(queue.get("mirror_pending") or 0),
             error_count=int(queue.get("mirror_error") or 0),
