@@ -302,8 +302,6 @@ def _system_badge_payload(label: str, percent: float) -> dict[str, object]:
 
 def _service_badge_payload(
     service_metrics: dict[str, object] | None,
-    *,
-    activity_hint: str | None = None,
 ) -> dict[str, object]:
     if not service_metrics:
         return _badge_payload(label="Relay service", message="unknown", color="red")
@@ -311,19 +309,12 @@ def _service_badge_payload(
     label = str(service_metrics.get("label") or "Relay service")
     active_state = str(service_metrics.get("active_state") or "unknown")
     sub_state = str(service_metrics.get("sub_state") or "").strip()
-    cpu_percent = float(service_metrics.get("cpu_percent") or 0.0)
 
     if active_state == "active":
         state_label = sub_state or "active"
-        if activity_hint:
-            return _badge_payload(
-                label=label,
-                message=f"{state_label} {activity_hint}",
-                color="brightgreen",
-            )
         return _badge_payload(
             label=label,
-            message=f"{state_label} {cpu_percent:.1f}%",
+            message=f"{state_label} busy",
             color="brightgreen",
         )
     if active_state in {"activating", "deactivating", "reloading"}:
@@ -1015,23 +1006,9 @@ async def badge_api_svg(request: web.Request) -> web.Response:
 
 async def badge_worker_svg(request: web.Request) -> web.Response:
     config = request.app[CONFIG_APP_KEY]
-    index = request.app[INDEX_APP_KEY]
     metrics = await asyncio.to_thread(_system_metrics_snapshot, config)
-    service_metrics = _service_metrics_for_badge(metrics, "worker")
-    queue = index.queue_summary()
-    active_work = int(queue.get("mirror_processing") or 0) + int(
-        queue.get("process_processing") or 0
-    )
-    activity_hint: str | None = None
-    if (
-        service_metrics
-        and str(service_metrics.get("active_state")) == "active"
-        and float(service_metrics.get("cpu_percent") or 0.0) < 0.1
-        and active_work > 0
-    ):
-        activity_hint = "busy"
     return _badge_svg_response(
-        _service_badge_payload(service_metrics, activity_hint=activity_hint)
+        _service_badge_payload(_service_metrics_for_badge(metrics, "worker"))
     )
 
 

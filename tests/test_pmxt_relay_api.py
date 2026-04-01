@@ -698,9 +698,9 @@ def test_system_endpoints_return_live_metrics_and_svg(tmp_path: Path):
         assert "RAM" in mem_svg and "34.0%" in mem_svg
         assert "Disk" in disk_svg and "56.5%" in disk_svg
         assert "I/O wait" in iowait_svg and "7.5%" in iowait_svg
-        assert "API service" in api_svg and "running 1.5%" in api_svg
-        assert "Worker service" in worker_svg and "running 18.0%" in worker_svg
-        assert "ClickHouse" in clickhouse_svg and "running 62.5%" in clickhouse_svg
+        assert "API service" in api_svg and "running busy" in api_svg
+        assert "Worker service" in worker_svg and "running busy" in worker_svg
+        assert "ClickHouse" in clickhouse_svg and "running busy" in clickhouse_svg
 
     asyncio.run(scenario())
 
@@ -754,31 +754,13 @@ def test_stage_badges_show_live_mirror_and_process_activity(tmp_path: Path):
     asyncio.run(scenario())
 
 
-def test_worker_badge_shows_busy_when_queue_active_but_cpu_sample_is_zero(
+def test_worker_badge_shows_running_busy_when_cpu_sample_is_zero(
     tmp_path: Path,
 ):
     async def scenario() -> None:
         config = _make_config(tmp_path)
         config.ensure_directories()
-        processing_filename = "polymarket_orderbook_2026-03-21T13.parquet"
-
         app = create_app(config)
-        index = app[INDEX_APP_KEY]
-        index.upsert_discovered_hour(
-            processing_filename,
-            f"https://r2.pmxt.dev/{processing_filename}",
-            1,
-        )
-        index.mark_mirrored(
-            processing_filename,
-            local_path=str(
-                config.raw_root / "2026" / "03" / "21" / processing_filename
-            ),
-            etag="etag",
-            content_length=123,
-            last_modified=datetime(2026, 3, 21, 13, tzinfo=UTC).isoformat(),
-        )
-        index.mark_processing(processing_filename)
 
         server = TestServer(app)
         client = TestClient(server)
