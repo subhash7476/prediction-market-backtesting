@@ -27,7 +27,7 @@ Relay VPS statistics:
 [![Disk](https://209-209-10-83.sslip.io/v1/badge/disk.svg?v=4)](https://209-209-10-83.sslip.io/v1/system)
 
 [![ClickHouse](https://209-209-10-83.sslip.io/v1/badge/clickhouse.svg?v=4)](https://209-209-10-83.sslip.io/v1/system)
-[![Worker service](https://209-209-10-83.sslip.io/v1/badge/worker.svg?v=4)](https://209-209-10-83.sslip.io/v1/system)
+[![Worker service](https://209-209-10-83.sslip.io/v1/badge/worker.svg?v=5)](https://209-209-10-83.sslip.io/v1/system)
 [![Mirror service](https://209-209-10-83.sslip.io/v1/badge/mirroring.svg?v=4)](https://209-209-10-83.sslip.io/v1/queue)
 [![API service](https://209-209-10-83.sslip.io/v1/badge/api.svg?v=4)](https://209-209-10-83.sslip.io/v1/system)
 

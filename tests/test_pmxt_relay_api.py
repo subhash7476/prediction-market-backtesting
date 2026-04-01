@@ -754,6 +754,83 @@ def test_stage_badges_show_live_mirror_and_process_activity(tmp_path: Path):
     asyncio.run(scenario())
 
 
+def test_worker_badge_shows_busy_when_queue_active_but_cpu_sample_is_zero(
+    tmp_path: Path,
+):
+    async def scenario() -> None:
+        config = _make_config(tmp_path)
+        config.ensure_directories()
+        processing_filename = "polymarket_orderbook_2026-03-21T13.parquet"
+
+        app = create_app(config)
+        index = app[INDEX_APP_KEY]
+        index.upsert_discovered_hour(
+            processing_filename,
+            f"https://r2.pmxt.dev/{processing_filename}",
+            1,
+        )
+        index.mark_mirrored(
+            processing_filename,
+            local_path=str(
+                config.raw_root / "2026" / "03" / "21" / processing_filename
+            ),
+            etag="etag",
+            content_length=123,
+            last_modified=datetime(2026, 3, 21, 13, tzinfo=UTC).isoformat(),
+        )
+        index.mark_processing(processing_filename)
+
+        server = TestServer(app)
+        client = TestClient(server)
+        await client.start_server()
+        try:
+            with patch(
+                "pmxt_relay.api._system_metrics_snapshot",
+                return_value={
+                    "cpu_percent": 12.5,
+                    "mem_percent": 34.0,
+                    "disk_percent": 56.5,
+                    "iowait_percent": 7.5,
+                    "services": {
+                        "api": {
+                            "service_name": "pmxt-relay-api.service",
+                            "label": "API service",
+                            "active_state": "active",
+                            "sub_state": "running",
+                            "pid": 111,
+                            "cpu_percent": 1.5,
+                        },
+                        "worker": {
+                            "service_name": "pmxt-relay-worker.service",
+                            "label": "Worker service",
+                            "active_state": "active",
+                            "sub_state": "running",
+                            "pid": 222,
+                            "cpu_percent": 0.0,
+                        },
+                        "clickhouse": {
+                            "service_name": "clickhouse-server.service",
+                            "label": "ClickHouse",
+                            "active_state": "active",
+                            "sub_state": "running",
+                            "pid": 333,
+                            "cpu_percent": 62.5,
+                        },
+                    },
+                },
+            ):
+                worker_badge = await client.get("/v1/badge/worker.svg")
+                assert worker_badge.status == 200
+                worker_svg = await worker_badge.text()
+        finally:
+            await client.close()
+
+        assert "Worker service" in worker_svg
+        assert "running busy" in worker_svg
+
+    asyncio.run(scenario())
+
+
 def test_filtered_api_returns_404_for_non_prebuilt_hour(tmp_path: Path):
     """Relay must not scan processed parquet on the fly — return 404 instead."""
 

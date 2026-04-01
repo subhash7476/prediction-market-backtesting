@@ -322,8 +322,8 @@ The shipped units are hardened for public deployment:
 - private `/tmp`
 - no device access or Linux capability set
 - API and worker wait for ClickHouse `http://127.0.0.1:8123/ping` before
-  starting, so reboot ordering does not crash-loop the relay while ClickHouse
-  is still coming up
+  starting, with `TimeoutStartSec=0` so slow cold boots do not trip systemd's
+  startup timeout while ClickHouse is still coming up
 - worker runs at `Nice=5` with `IOSchedulingClass=best-effort` so raw-hour
   ingest wins over best-effort cleanup work
 - `pmxt-disable-wbt.service` forces `wbt_lat_usec=0` on `xvda`, `xvdb`, and

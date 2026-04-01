@@ -14,6 +14,7 @@ ExecStartPre=/bin/sh -c 'until curl -fsS http://127.0.0.1:8123/ping >/dev/null; 
 ExecStart=/opt/prediction-market-backtesting/.venv/bin/python -m pmxt_relay worker
 Restart=always
 RestartSec=5
+TimeoutStartSec=0
 TimeoutStopSec=30
 UMask=0027
 NoNewPrivileges=true
