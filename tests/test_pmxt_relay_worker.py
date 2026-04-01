@@ -134,6 +134,9 @@ def test_clickhouse_backend_never_requests_processed_or_filtered_file_writes(
     monkeypatch,
 ) -> None:
     config = replace(_make_config(tmp_path), filtered_store_backend="clickhouse")
+    config.ensure_directories()
+    assert not config.processed_root.exists()
+    assert not config.filtered_root.exists()
     filename = "polymarket_orderbook_2026-03-21T12.parquet"
     raw_path = config.raw_root / raw_relative_path(filename)
     raw_path.parent.mkdir(parents=True, exist_ok=True)

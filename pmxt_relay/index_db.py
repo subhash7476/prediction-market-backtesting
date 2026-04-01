@@ -876,13 +876,10 @@ class RelayIndex:
             "sharded_hours": row["sharded_hours"],
             "processed_hours": row["processed_hours"],
             "ready_to_process_hours": row["ready_to_process_hours"],
-            "ready_to_prebuild_hours": row["ready_to_prebuild_hours"],
             "processing_hours": row["processing_hours"],
             "sharding_hours": row["sharding_hours"],
-            "prebuilding_hours": row["prebuilding_hours"],
             "mirror_errors": row["mirror_errors"],
             "process_errors": row["shard_errors"],
-            "prebuild_errors": row["prebuild_errors"],
             "filtered_hours": filtered_hours,
             "last_event_at": last_event_at,
             "last_error_at": last_error_at,
@@ -911,7 +908,15 @@ class RelayIndex:
             FROM archive_hours
             """
         ).fetchone()
-        return dict(row)
+        payload = dict(row)
+        for key in (
+            "prebuild_ready",
+            "prebuild_pending",
+            "prebuild_processing",
+            "prebuild_error",
+        ):
+            payload.pop(key, None)
+        return payload
 
     def current_processing_filename(self) -> str | None:
         row = self._conn.execute(

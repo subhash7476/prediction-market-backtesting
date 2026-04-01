@@ -196,3 +196,22 @@ def test_pmxt_sports_backtest_uses_fixed_samples(
     assert len(summary_report_calls) == 1
     assert summary_report_calls[0]["output_path"] == module.SUMMARY_REPORT_PATH
     assert len(summary_report_calls[0]["results"]) == len(module.SPORT_MARKET_SAMPLES)
+
+
+def test_pmxt_runner_window_env_overrides(monkeypatch: pytest.MonkeyPatch):
+    runner = importlib.import_module(
+        "backtests.polymarket_quote_tick._polymarket_single_market_pmxt_runner"
+    )
+    monkeypatch.setenv("START_TIME", "2026-02-21T16:00:00Z")
+    monkeypatch.setenv("END_TIME", "2026-02-23T06:00:00Z")
+    monkeypatch.setenv("LOOKBACK_HOURS", "38")
+
+    start_time, end_time, lookback_hours = runner._apply_window_env_overrides(  # noqa: SLF001
+        start_time=EXPECTED_START_TIME,
+        end_time=EXPECTED_END_TIME,
+        lookback_hours=None,
+    )
+
+    assert start_time == "2026-02-21T16:00:00Z"
+    assert end_time == "2026-02-23T06:00:00Z"
+    assert lookback_hours == 38.0

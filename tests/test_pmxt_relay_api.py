@@ -233,7 +233,7 @@ def test_badge_endpoints_return_shields_payloads(tmp_path: Path):
         config = _make_config(tmp_path)
         config.ensure_directories()
         ready_filename = "polymarket_orderbook_2026-03-21T12.parquet"
-        prebuilding_filename = "polymarket_orderbook_2026-03-21T13.parquet"
+        processing_filename = "polymarket_orderbook_2026-03-21T13.parquet"
 
         app = create_app(config)
         index = app[INDEX_APP_KEY]
@@ -252,24 +252,24 @@ def test_badge_endpoints_return_shields_payloads(tmp_path: Path):
         index.replace_filtered_hours(ready_filename, [])
 
         index.upsert_discovered_hour(
-            prebuilding_filename,
-            f"https://r2.pmxt.dev/{prebuilding_filename}",
+            processing_filename,
+            f"https://r2.pmxt.dev/{processing_filename}",
             1,
         )
         index.mark_mirrored(
-            prebuilding_filename,
+            processing_filename,
             local_path="/tmp/raw.parquet",
             etag=None,
             content_length=None,
             last_modified=None,
         )
-        index.mark_sharded(prebuilding_filename)
-        index.mark_prebuilding(prebuilding_filename)
+        index.mark_sharded(processing_filename)
+        index.mark_prebuilding(processing_filename)
         index.log_event(
             level="INFO",
             event_type="filtered_prebuild_progress",
-            filename=prebuilding_filename,
-            message="Prebuild progress for current hour",
+            filename=processing_filename,
+            message="Process progress for current hour",
             payload={
                 "processed_rows": 10682368,
                 "total_rows": 21454016,
@@ -304,13 +304,13 @@ def test_badge_endpoints_return_shields_payloads(tmp_path: Path):
             assert lag_response.status == 200
             lag_payload = await lag_response.json()
 
-            prebuild_file_response = await client.get("/v1/badge/prebuild-file")
-            assert prebuild_file_response.status == 200
-            prebuild_file_payload = await prebuild_file_response.json()
+            file_response = await client.get("/v1/badge/file")
+            assert file_response.status == 200
+            file_payload = await file_response.json()
 
-            prebuild_progress_response = await client.get("/v1/badge/prebuild-progress")
-            assert prebuild_progress_response.status == 200
-            prebuild_progress_payload = await prebuild_progress_response.json()
+            rows_response = await client.get("/v1/badge/rows")
+            assert rows_response.status == 200
+            rows_payload = await rows_response.json()
 
             with index._conn:  # noqa: SLF001
                 index._conn.execute(  # noqa: SLF001
@@ -374,13 +374,13 @@ def test_badge_endpoints_return_shields_payloads(tmp_path: Path):
             "message": "0.04 hr/hr",
             "color": "orange",
         }
-        assert prebuild_file_payload == {
+        assert file_payload == {
             "schemaVersion": 1,
             "label": "PMXT file",
-            "message": prebuilding_filename,
+            "message": processing_filename,
             "color": "blue",
         }
-        assert prebuild_progress_payload == {
+        assert rows_payload == {
             "schemaVersion": 1,
             "label": "PMXT rows",
             "message": "10,682,368 / 21,454,016",
@@ -433,8 +433,8 @@ def test_badge_svg_endpoints_return_svg(tmp_path: Path):
                 "/v1/badge/mirrored.svg",
                 "/v1/badge/processed.svg",
                 "/v1/badge/rate.svg",
-                "/v1/badge/prebuild-file.svg",
-                "/v1/badge/prebuild-progress.svg",
+                "/v1/badge/file.svg",
+                "/v1/badge/rows.svg",
             ):
                 response = await client.get(path)
                 assert response.status == 200
@@ -449,15 +449,15 @@ def test_badge_svg_endpoints_return_svg(tmp_path: Path):
         assert "PMXT mirrored" in svg_payloads["/v1/badge/mirrored.svg"]
         assert "PMXT processed" in svg_payloads["/v1/badge/processed.svg"]
         assert "PMXT rate" in svg_payloads["/v1/badge/rate.svg"]
-        assert filename in svg_payloads["/v1/badge/prebuild-file.svg"]
-        assert (
-            "10,682,368 / 21,454,016" in svg_payloads["/v1/badge/prebuild-progress.svg"]
-        )
+        assert filename in svg_payloads["/v1/badge/file.svg"]
+        assert "10,682,368 / 21,454,016" in svg_payloads["/v1/badge/rows.svg"]
 
     asyncio.run(scenario())
 
 
-def test_prebuild_badges_follow_process_progress_when_worker_is_active(tmp_path: Path):
+def test_file_and_rows_badges_follow_process_progress_when_worker_is_active(
+    tmp_path: Path,
+):
     async def scenario() -> None:
         config = _make_config(tmp_path)
         config.ensure_directories()
@@ -493,23 +493,23 @@ def test_prebuild_badges_follow_process_progress_when_worker_is_active(tmp_path:
         client = TestClient(server)
         await client.start_server()
         try:
-            prebuild_file_response = await client.get("/v1/badge/prebuild-file")
-            assert prebuild_file_response.status == 200
-            prebuild_file_payload = await prebuild_file_response.json()
+            file_response = await client.get("/v1/badge/file")
+            assert file_response.status == 200
+            file_payload = await file_response.json()
 
-            prebuild_progress_response = await client.get("/v1/badge/prebuild-progress")
-            assert prebuild_progress_response.status == 200
-            prebuild_progress_payload = await prebuild_progress_response.json()
+            rows_response = await client.get("/v1/badge/rows")
+            assert rows_response.status == 200
+            rows_payload = await rows_response.json()
         finally:
             await client.close()
 
-        assert prebuild_file_payload == {
+        assert file_payload == {
             "schemaVersion": 1,
             "label": "PMXT file",
             "message": filename,
             "color": "blue",
         }
-        assert prebuild_progress_payload == {
+        assert rows_payload == {
             "schemaVersion": 1,
             "label": "PMXT rows",
             "message": "123,456 / 654,321",
@@ -519,7 +519,9 @@ def test_prebuild_badges_follow_process_progress_when_worker_is_active(tmp_path:
     asyncio.run(scenario())
 
 
-def test_prebuild_badges_ignore_stale_progress_from_previous_hour(tmp_path: Path):
+def test_file_and_rows_badges_ignore_stale_progress_from_previous_hour(
+    tmp_path: Path,
+):
     async def scenario() -> None:
         config = _make_config(tmp_path)
         config.ensure_directories()
@@ -557,23 +559,23 @@ def test_prebuild_badges_ignore_stale_progress_from_previous_hour(tmp_path: Path
         client = TestClient(server)
         await client.start_server()
         try:
-            prebuild_file_response = await client.get("/v1/badge/prebuild-file")
-            assert prebuild_file_response.status == 200
-            prebuild_file_payload = await prebuild_file_response.json()
+            file_response = await client.get("/v1/badge/file")
+            assert file_response.status == 200
+            file_payload = await file_response.json()
 
-            prebuild_progress_response = await client.get("/v1/badge/prebuild-progress")
-            assert prebuild_progress_response.status == 200
-            prebuild_progress_payload = await prebuild_progress_response.json()
+            rows_response = await client.get("/v1/badge/rows")
+            assert rows_response.status == 200
+            rows_payload = await rows_response.json()
         finally:
             await client.close()
 
-        assert prebuild_file_payload == {
+        assert file_payload == {
             "schemaVersion": 1,
             "label": "PMXT file",
             "message": current_filename,
             "color": "blue",
         }
-        assert prebuild_progress_payload == {
+        assert rows_payload == {
             "schemaVersion": 1,
             "label": "PMXT rows",
             "message": "starting",

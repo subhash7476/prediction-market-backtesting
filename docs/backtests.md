@@ -75,7 +75,9 @@ bundled in the module so examples stay runnable.
 - `MARKET_TICKER` for Kalshi single-market runners
 - `MARKET_SLUG` for Polymarket trade-tick single-market runners
 - `TOKEN_INDEX` to choose which Polymarket outcome token to backtest
-- `LOOKBACK_DAYS` or explicit start/end vars for data window size
+- `LOOKBACK_DAYS` for rolling trade-tick windows
+- `START_TIME`, `END_TIME`, or `LOOKBACK_HOURS` to override the PMXT quote-tick
+  runner window from the shell without editing the script
 - `PMXT_RELAY_BASE_URL` to override the default public relay or disable it with
   `PMXT_RELAY_BASE_URL=0`
 - `PMXT_LOCAL_ARCHIVE_DIR` to use your own local PMXT raw hour mirror before

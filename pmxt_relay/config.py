@@ -172,14 +172,15 @@ class RelayConfig:
         return self.filtered_store_backend.strip().casefold() == "clickhouse"
 
     def ensure_directories(self) -> None:
-        for path in (
+        paths = [
             self.data_dir,
             self.raw_root,
-            self.filtered_root,
-            self.processed_root,
             self.state_root,
             self.tmp_root,
-        ):
+        ]
+        if not self.uses_clickhouse_filtered_store:
+            paths.extend((self.filtered_root, self.processed_root))
+        for path in paths:
             path.mkdir(parents=True, exist_ok=True)
             self._assert_directory_writable(path)
 

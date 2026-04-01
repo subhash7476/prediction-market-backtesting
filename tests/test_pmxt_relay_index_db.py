@@ -29,7 +29,6 @@ def test_relay_index_events_and_queue_summary(tmp_path: Path):
     queue = index.queue_summary()
     assert queue["mirror_processing"] == 1
     assert queue["process_processing"] == 1
-    assert queue["prebuild_processing"] == 0
     assert queue["process_ready"] == 0
 
     index.log_event(level="INFO", event_type="first", message="first message")
@@ -43,11 +42,9 @@ def test_relay_index_events_and_queue_summary(tmp_path: Path):
     assert len(events) == 2
     assert stats["archive_hours"] == 2
     assert stats["ready_to_process_hours"] == 0
-    assert stats["ready_to_prebuild_hours"] == 0
     assert stats["processing_hours"] == 1
     assert stats["mirror_errors"] == 0
     assert stats["process_errors"] == 0
-    assert stats["prebuild_errors"] == 0
     assert stats["last_event_at"] is not None
     assert stats["last_error_at"] is not None
 
@@ -128,9 +125,12 @@ def test_initialize_can_reset_prebuild_inflight_separately(tmp_path: Path):
     )
 
     assert reset_counts == (0, 0, 1)
-    queue = reopened.queue_summary()
-    assert queue["prebuild_pending"] == 1
-    assert queue["prebuild_processing"] == 0
+    row = reopened._conn.execute(  # noqa: SLF001
+        "SELECT prebuild_status FROM archive_hours WHERE filename = ?",
+        (filename,),
+    ).fetchone()
+    assert row is not None
+    assert row["prebuild_status"] == "pending"
 
 
 def test_list_hours_needing_process_excludes_already_processing(tmp_path: Path):
@@ -233,7 +233,6 @@ def test_mark_prebuilt_tracks_filtered_artifact_count(tmp_path: Path):
 
     assert stats["sharded_hours"] == 1
     assert stats["processed_hours"] == 1
-    assert stats["ready_to_prebuild_hours"] == 0
     assert stats["filtered_hours"] == 42
     assert index.list_hours_needing_filtered_prebuild() == []
 
@@ -716,7 +715,6 @@ def test_replace_filtered_hours_sets_all_statuses_ready(tmp_path: Path):
 
     queue = index.queue_summary()
     assert queue["process_error"] == 0
-    assert queue["prebuild_error"] == 0
     rows = index.list_filtered_for_filename(filename)
     assert len(rows) == 1
     stats = index.stats()

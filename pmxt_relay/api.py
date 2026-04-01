@@ -593,7 +593,7 @@ def _rate_badge_payload(
     )
 
 
-def _prebuild_file_badge_payload(
+def _file_badge_payload(
     *,
     stats: dict[str, int | str | None],
     progress: PrebuildProgress | None,
@@ -617,7 +617,7 @@ def _prebuild_file_badge_payload(
     )
 
 
-def _prebuild_progress_badge_payload(
+def _rows_badge_payload(
     *,
     stats: dict[str, int | str | None],
     progress: PrebuildProgress | None,
@@ -920,11 +920,11 @@ async def badge_rate(request: web.Request) -> web.Response:
     return web.json_response(_rate_badge_payload(stats=index.stats()))
 
 
-async def badge_prebuild_file(request: web.Request) -> web.Response:
+async def badge_file(request: web.Request) -> web.Response:
     index = request.app[INDEX_APP_KEY]
     stats = index.stats()
     return web.json_response(
-        _prebuild_file_badge_payload(
+        _file_badge_payload(
             stats=stats,
             progress=index.latest_prebuild_progress(),
             current_filename=index.current_processing_filename(),
@@ -932,11 +932,11 @@ async def badge_prebuild_file(request: web.Request) -> web.Response:
     )
 
 
-async def badge_prebuild_progress(request: web.Request) -> web.Response:
+async def badge_rows(request: web.Request) -> web.Response:
     index = request.app[INDEX_APP_KEY]
     stats = index.stats()
     return web.json_response(
-        _prebuild_progress_badge_payload(
+        _rows_badge_payload(
             stats=stats,
             progress=index.latest_prebuild_progress(),
             current_filename=index.current_processing_filename(),
@@ -1085,11 +1085,11 @@ async def badge_rate_svg(request: web.Request) -> web.Response:
     return _badge_svg_response(_rate_badge_payload(stats=index.stats()))
 
 
-async def badge_prebuild_file_svg(request: web.Request) -> web.Response:
+async def badge_file_svg(request: web.Request) -> web.Response:
     index = request.app[INDEX_APP_KEY]
     stats = index.stats()
     return _badge_svg_response(
-        _prebuild_file_badge_payload(
+        _file_badge_payload(
             stats=stats,
             progress=index.latest_prebuild_progress(),
             current_filename=index.current_processing_filename(),
@@ -1097,11 +1097,11 @@ async def badge_prebuild_file_svg(request: web.Request) -> web.Response:
     )
 
 
-async def badge_prebuild_progress_svg(request: web.Request) -> web.Response:
+async def badge_rows_svg(request: web.Request) -> web.Response:
     index = request.app[INDEX_APP_KEY]
     stats = index.stats()
     return _badge_svg_response(
-        _prebuild_progress_badge_payload(
+        _rows_badge_payload(
             stats=stats,
             progress=index.latest_prebuild_progress(),
             current_filename=index.current_processing_filename(),
@@ -1218,8 +1218,8 @@ def create_app(config: RelayConfig) -> web.Application:
     app.router.add_get("/v1/badge/latest", badge_latest)
     app.router.add_get("/v1/badge/lag", badge_lag)
     app.router.add_get("/v1/badge/rate", badge_rate)
-    app.router.add_get("/v1/badge/prebuild-file", badge_prebuild_file)
-    app.router.add_get("/v1/badge/prebuild-progress", badge_prebuild_progress)
+    app.router.add_get("/v1/badge/file", badge_file)
+    app.router.add_get("/v1/badge/rows", badge_rows)
     app.router.add_get("/v1/badge/status.svg", badge_status_svg)
     app.router.add_get("/v1/badge/backfill.svg", badge_backfill_svg)
     app.router.add_get("/v1/badge/mirrored.svg", badge_mirrored_svg)
@@ -1227,8 +1227,8 @@ def create_app(config: RelayConfig) -> web.Application:
     app.router.add_get("/v1/badge/latest.svg", badge_latest_svg)
     app.router.add_get("/v1/badge/lag.svg", badge_lag_svg)
     app.router.add_get("/v1/badge/rate.svg", badge_rate_svg)
-    app.router.add_get("/v1/badge/prebuild-file.svg", badge_prebuild_file_svg)
-    app.router.add_get("/v1/badge/prebuild-progress.svg", badge_prebuild_progress_svg)
+    app.router.add_get("/v1/badge/file.svg", badge_file_svg)
+    app.router.add_get("/v1/badge/rows.svg", badge_rows_svg)
     app.router.add_get("/v1/badge/cpu.svg", badge_cpu_svg)
     app.router.add_get("/v1/badge/load.svg", badge_load_svg)
     app.router.add_get("/v1/badge/mem.svg", badge_mem_svg)

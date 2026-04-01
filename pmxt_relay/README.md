@@ -3,9 +3,9 @@
 `pmxt_relay/` is a self-hosted PMXT acceleration layer for the backtests in this
 repo.
 
-> UNDER CONSTRUCTION: the old filesystem prebuild model is being phased out.
-> The relay HTTP surface is staying stable, but the backend is being refactored
-> toward a ClickHouse-friendly path instead of millions of tiny parquet files.
+> UNDER CONSTRUCTION: the supported relay deployment path is now ClickHouse-only.
+> This document focuses on the sustainable raw -> ClickHouse workflow instead of
+> the old tiny-file fanout.
 
 The relay API now has an explicit filtered-hour store seam in code, so the HTTP
 surface can stay stable while the backend moves away from tiny filesystem
@@ -42,30 +42,30 @@ Each hourly archive file moves through four stages:
 | Discovered  | `mirror_status`       | Filename found on PMXT archive index              |
 | Mirrored    | `mirror_status=ready` | Raw parquet downloaded to `raw/`                  |
 | Processed   | `process_status=ready`| Raw hour parsed into filtered relay rows          |
-| Query-ready | `prebuild_status=ready` | Available through the API, via files or ClickHouse |
+| Query-ready | completed flag | Internal completion state meaning the hour is ready to serve |
 
 **"Processed" in the badges/stats means query-ready output**, not just "we
 downloaded the raw parquet." The public badges and `/v1/stats` use this
 definition:
 
 - `mirrored` badge: `mirror_status=ready` / total discovered
-- `processed` badge: `prebuild_status=ready` / `mirror_status=ready`
-- `rate` badge: rolling 24-hour completed-hour rate based on `prebuilt_at`
-- `prebuild-file` badge: current parquet filename from the latest
-  `process_progress` or `filtered_prebuild_progress` event while work is active
-- `prebuild-progress` badge: full `processed_rows / total_rows` fraction from
-  the latest `process_progress` or `filtered_prebuild_progress` event
+- `processed` badge: completed query-ready hours / mirrored hours
+- `rate` badge: rolling 24-hour completed-hour rate based on the completion timestamp
+- `file` badge: current parquet filename from the latest
+  progress event while work is active
+- `rows` badge: full `processed_rows / total_rows` fraction from the latest
+  progress event
 
 The worker also adopts any raw parquet files that already exist under `raw/`
 into the current relay state. That keeps `mirrored_hours` aligned with the
 actual local raw inventory instead of only counting hours mirrored by the
 current worker process.
 
-The inflight reset on startup is split by stage so the worker and prebuild
-service don't clobber each other's state:
+The inflight reset on startup is split by stage so worker restarts do not
+leave hours stranded in a fake in-progress state:
 
-- Worker resets: mirror + process inflight (not prebuild)
-- Prebuild service resets: prebuild inflight (not mirror/process)
+- Worker resets: mirror + process inflight
+- the internal completion flag is preserved unless an explicit maintenance step resets it
 
 ## Directory Layout
 
@@ -74,8 +74,6 @@ By default the relay stores relay-owned state under `/srv/pmxt-relay`:
 ```text
 /srv/pmxt-relay/
   raw/YYYY/MM/DD/polymarket_orderbook_YYYY-MM-DDTHH.parquet
-  processed/YYYY/MM/DD/polymarket_orderbook_YYYY-MM-DDTHH.parquet
-  filtered/<condition_id>/<token_id>/polymarket_orderbook_YYYY-MM-DDTHH.parquet
   state/relay.sqlite3
   tmp/
 ```
@@ -86,13 +84,8 @@ This means the relay keeps two persistent layers:
 - `state/` stores the relay SQLite metadata/index
 
 When `PMXT_RELAY_FILTERED_STORE_BACKEND=clickhouse`, the parsed filtered rows
-live in ClickHouse instead of `processed/` and `filtered/`. Those directories
-can stay empty, and the old tiny-file fanout is no longer required.
-
-The legacy filesystem backend still uses:
-
-- `processed/` for one canonical parquet shard per hour
-- `filtered/` for one parquet per `(condition_id, token_id, hour)`
+live in ClickHouse instead of `processed/` and `filtered/`. On a clean box,
+those legacy directories should not exist at all.
 
 Temporary `.tmp` files only exist during atomic writes.
 
@@ -104,13 +97,6 @@ For the new ClickHouse-backed path, run two long-lived services:
 - Worker: `uv run python -m pmxt_relay worker`
 
 The worker mirrors raw hours and inserts filtered rows directly into ClickHouse.
-There is no separate filtered-prebuild phase in that mode, so
-`pmxt-relay-prebuild.service` should stay disabled.
-
-The legacy filesystem backend still uses a third service:
-
-- Prebuild: `uv run python -m pmxt_relay prebuild-filtered`
-
 The worker handles discovery, mirroring, and ClickHouse ingestion:
 
 1. scrapes `https://archive.pmxt.dev/data/Polymarket?page=N`
@@ -119,14 +105,6 @@ The worker handles discovery, mirroring, and ClickHouse ingestion:
 4. streams each raw hour through Arrow, extracts `token_id` from `data`, and
    inserts the filtered relay rows into ClickHouse
 5. keeps polling for new hours
-
-If you stay on the legacy filesystem backend, the prebuild service is the only
-process that writes final filtered output:
-
-1. walks sharded hours whose `prebuild_status` is `pending`
-2. materializes their final `(condition_id, token_id, hour)` parquet files
-3. keeps running in the background so shards get converted to backtest-ready
-   files without waiting for an API request
 
 The ClickHouse worker path never fans back out into per-market parquet files.
 That is the whole point of the migration.
@@ -142,21 +120,18 @@ On a fresh ClickHouse-backed VPS, the steady-state layout should look like this:
 - `raw/` grows with mirrored PMXT hourly parquet files
 - `state/relay.sqlite3` tracks archive, queue, and event metadata
 - ClickHouse stores the filtered relay rows and serves `/v1/filtered/...`
-- `processed/` stays empty
-- `filtered/` stays empty
-- `pmxt-relay-prebuild.service` stays disabled
+- `processed/` does not exist
+- `filtered/` does not exist
 
 If you are migrating from the old filesystem backend, do not keep both systems
-alive. Stop the old fanout path, recreate clean empty `processed/`, `filtered/`,
-and `tmp/` directories for the new services, and remove any renamed legacy
+alive. Stop the old fanout path, remove any legacy `processed/` and `filtered/`
+directories, recreate `tmp/` if needed, and remove any renamed legacy
 `*.purge-*` directories before calling the box fully clean.
 
 The design is restart-safe:
 
 - raw downloads go through a temp file and atomic rename
 - ClickHouse inserts are idempotent at the "hour already ingested" check
-- legacy processed hour shards go through a temp file and atomic rename
-- legacy eagerly prebuilt filtered outputs go through a temp file and atomic rename
 - relay state lives in `state/relay.sqlite3`
 - the worker can resume after interruption without losing already mirrored or
   already processed hours
@@ -177,7 +152,7 @@ uv venv --python 3.12
 uv pip install -e nautilus_pm/ bokeh plotly numpy py-clob-client duckdb
 
 useradd --system --home /srv/pmxt-relay --shell /usr/sbin/nologin pmxtrelay || true
-install -o pmxtrelay -g pmxtrelay -d /srv/pmxt-relay /srv/pmxt-relay/raw /srv/pmxt-relay/processed /srv/pmxt-relay/filtered /srv/pmxt-relay/state /srv/pmxt-relay/tmp
+install -o pmxtrelay -g pmxtrelay -d /srv/pmxt-relay /srv/pmxt-relay/raw /srv/pmxt-relay/state /srv/pmxt-relay/tmp
 
 cp pmxt_relay/systemd/pmxt-relay.env.example /etc/pmxt-relay.env
 systemctl enable --now clickhouse-server
@@ -194,13 +169,11 @@ Install the systemd units:
 ```bash
 cp pmxt_relay/systemd/pmxt-relay-api.service /etc/systemd/system/
 cp pmxt_relay/systemd/pmxt-relay-worker.service /etc/systemd/system/
-cp pmxt_relay/systemd/pmxt-relay-prebuild.service /etc/systemd/system/
 cp pmxt_relay/systemd/pmxt-disable-wbt.service /etc/systemd/system/
 systemctl daemon-reload
 systemctl enable --now pmxt-disable-wbt.service
 systemctl enable --now pmxt-relay-api.service
 systemctl enable --now pmxt-relay-worker.service
-systemctl disable --now pmxt-relay-prebuild.service
 ```
 
 Turn on the firewall with only SSH and the public relay port exposed:
@@ -232,21 +205,20 @@ After the initial deploy, verify the live box matches the intended ClickHouse
 layout:
 
 ```bash
-systemctl is-active pmxt-disable-wbt.service pmxt-relay-api.service pmxt-relay-worker.service pmxt-relay-prebuild.service clickhouse-server.service
+systemctl is-active pmxt-disable-wbt.service pmxt-relay-api.service pmxt-relay-worker.service clickhouse-server.service
 curl -fsS http://127.0.0.1:8080/healthz
 curl -fsS http://127.0.0.1:8080/v1/stats
 find /srv/pmxt-relay/raw -type f | wc -l
-find /srv/pmxt-relay/processed -type f | wc -l
-find /srv/pmxt-relay/filtered -type f | wc -l
+test ! -e /srv/pmxt-relay/processed
+test ! -e /srv/pmxt-relay/filtered
 ```
 
 Expected shape in ClickHouse mode:
 
 - `pmxt-disable-wbt`, `pmxt-relay-api`, `pmxt-relay-worker`, and
   `clickhouse-server` are `active`
-- `pmxt-relay-prebuild.service` is `inactive`
 - `raw/` contains mirrored parquet hours
-- `processed/` and `filtered/` both report `0`
+- `processed/` and `filtered/` are absent
 
 ## API
 
@@ -255,8 +227,8 @@ Expected shape in ClickHouse mode:
 - `GET /v1/queue`
 - `GET /v1/events?limit=100`
 - `GET /v1/inflight`
-- `GET /v1/badge/{status,backfill,mirrored,processed,rate,latest,lag,prebuild-file,prebuild-progress}`
-- `GET /v1/badge/{status,backfill,mirrored,processed,rate,latest,lag,prebuild-file,prebuild-progress}.svg`
+- `GET /v1/badge/{status,backfill,mirrored,processed,rate,latest,lag,file,rows}`
+- `GET /v1/badge/{status,backfill,mirrored,processed,rate,latest,lag,file,rows}.svg`
 - `GET /v1/badge/{cpu,load,mem,disk,iowait,api,worker,mirroring,processing,clickhouse}.svg`
 - `GET /v1/markets/{condition_id}/tokens/{token_id}/hours?start=...&end=...`
 - `GET /v1/filtered/{condition_id}/{token_id}/{filename}`
@@ -333,14 +305,12 @@ Common env vars:
 ## Systemd
 
 Example unit files live in [`systemd/`](./systemd/). For the ClickHouse-backed
-path, enable the worker, API, and `pmxt-disable-wbt.service`, and keep the old
-prebuild service disabled:
+path, enable the worker, API, and `pmxt-disable-wbt.service`:
 
 ```bash
 systemctl enable --now pmxt-disable-wbt.service
 systemctl enable --now pmxt-relay-worker.service
 systemctl enable --now pmxt-relay-api.service
-systemctl disable --now pmxt-relay-prebuild.service
 ```
 
 The shipped units are hardened for public deployment:
@@ -366,28 +336,21 @@ process on the box. That is normal during large inserts, background merges, or
 I/O wait, and it is why `/v1/system` can report `cpu_percent=100` even while
 the API is healthy.
 
-The legacy prebuild path is still the biggest one-shot RAM spike. Each hourly
-parquet file contains ~30M rows spread across thousands of
-`(condition_id, token_id)` partitions, and materializing one hour can use 3-4
-GB of RAM.
-
 On a 6 GB VPS the conservative service limits are:
 
-| Service  | `MemoryMax` | `MemorySwapMax` | Notes                            |
-|----------|-------------|-----------------|----------------------------------|
-| Worker   | 2500M       | 512M            | Mirror + ClickHouse ingest       |
-| Prebuild | 4500M       | 486M            | Legacy one-hour fanout           |
+| Service    | `MemoryMax` | `MemorySwapMax` | Notes                      |
+|------------|-------------|-----------------|----------------------------|
+| Worker     | 2500M       | 512M            | Mirror + ClickHouse ingest |
+| ClickHouse | distro/unit | distro/unit     | Main query + merge engine  |
 
 Key env vars that still matter:
 
 - `PMXT_RELAY_DUCKDB_MEMORY_LIMIT` - DuckDB query memory cap (set to ~25% of
-  total RAM when two services run concurrently)
+  total RAM when the worker is parsing very large raw hours)
 - `PMXT_RELAY_DUCKDB_THREADS` - DuckDB parallelism (lower = less peak memory)
 - `PMXT_RELAY_CLICKHOUSE_INSERT_BATCH_ROWS` - max filtered rows per ClickHouse
   insert batch (lower it if large hours trigger ClickHouse OOMs while parsing
   Parquet inserts)
-- `PMXT_RELAY_FILTERED_WORKERS` - concurrent partition materializers in the
-  legacy prebuild step (keep at 1 on low-RAM machines)
 
 The systemd units in `systemd/` include `MemoryMax` to prevent OOM kills from
 crashing the whole machine. If a service hits its limit, systemd kills just
