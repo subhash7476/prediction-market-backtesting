@@ -49,6 +49,13 @@ class RelayConfig:
     event_retention: int
     api_rate_limit_per_minute: int
     api_list_max_hours: int
+    filtered_store_backend: str = "filesystem"
+    clickhouse_url: str = "http://127.0.0.1:8123"
+    clickhouse_database: str = "pmxt_relay"
+    clickhouse_table: str = "filtered_updates"
+    clickhouse_user: str | None = None
+    clickhouse_password: str | None = None
+    clickhouse_timeout_secs: int = 60
     trusted_proxy_ips: tuple[str, ...] = ("127.0.0.1", "::1")
     filtered_materialization_workers: int = 4
 
@@ -91,6 +98,33 @@ class RelayConfig:
                 1,
                 _env_int("PMXT_RELAY_API_LIST_MAX_HOURS", 2000),
             ),
+            filtered_store_backend=(
+                os.getenv("PMXT_RELAY_FILTERED_STORE_BACKEND", "filesystem")
+                .strip()
+                .casefold()
+            ),
+            clickhouse_url=os.getenv(
+                "PMXT_RELAY_CLICKHOUSE_URL",
+                "http://127.0.0.1:8123",
+            ).rstrip("/"),
+            clickhouse_database=os.getenv(
+                "PMXT_RELAY_CLICKHOUSE_DATABASE",
+                "pmxt_relay",
+            ).strip(),
+            clickhouse_table=os.getenv(
+                "PMXT_RELAY_CLICKHOUSE_TABLE",
+                "filtered_updates",
+            ).strip(),
+            clickhouse_user=(os.getenv("PMXT_RELAY_CLICKHOUSE_USER") or "").strip()
+            or None,
+            clickhouse_password=(
+                os.getenv("PMXT_RELAY_CLICKHOUSE_PASSWORD") or ""
+            ).strip()
+            or None,
+            clickhouse_timeout_secs=max(
+                5,
+                _env_int("PMXT_RELAY_CLICKHOUSE_TIMEOUT_SECS", 60),
+            ),
             trusted_proxy_ips=_env_csv(
                 "PMXT_RELAY_TRUSTED_PROXY_IPS",
                 ("127.0.0.1", "::1"),
@@ -127,6 +161,10 @@ class RelayConfig:
     @property
     def db_path(self) -> Path:
         return self.state_root / "relay.sqlite3"
+
+    @property
+    def uses_clickhouse_filtered_store(self) -> bool:
+        return self.filtered_store_backend.strip().casefold() == "clickhouse"
 
     def ensure_directories(self) -> None:
         for path in (

@@ -11,6 +11,7 @@ from urllib.request import Request
 from urllib.request import urlopen
 
 from pmxt_relay.archive import extract_archive_filenames
+from pmxt_relay.clickhouse import ClickHouseRelay
 from pmxt_relay.archive import fetch_archive_page
 from pmxt_relay.config import RelayConfig
 from pmxt_relay.index_db import RelayIndex
@@ -46,6 +47,11 @@ class RelayWorker:
             reset_prebuild_inflight=reset_prebuild_inflight,
         )
         self._processor = RelayHourProcessor(config)
+        self._clickhouse = (
+            ClickHouseRelay(config) if config.uses_clickhouse_filtered_store else None
+        )
+        if self._clickhouse is not None:
+            self._clickhouse.ensure_schema()
         if reset_mirror or reset_process or reset_prebuild:
             self._record_event(
                 level="WARNING",
@@ -102,7 +108,11 @@ class RelayWorker:
         discovered = self._discover_archive_hours()
         mirrored = self._mirror_pending_hours()
         processed = self._process_pending_hours()
-        prebuilt = 0 if self._skip_prebuild else self._prebuild_filtered_hours(limit=1)
+        prebuilt = (
+            0
+            if self._skip_prebuild or self._clickhouse is not None
+            else self._prebuild_filtered_hours(limit=1)
+        )
         total = discovered + mirrored + processed + prebuilt
         self._record_event(
             level="INFO",
@@ -313,6 +323,22 @@ class RelayWorker:
         ):
             filename = row["filename"]
             raw_path = Path(row["local_path"])
+            if self._clickhouse is not None and self._clickhouse.hour_exists(filename):
+                self._index.mark_sharded(filename)
+                self._index.mark_prebuilt(
+                    filename,
+                    filtered_artifact_count=self._clickhouse.hour_group_count(filename),
+                )
+                self._record_event(
+                    level="INFO",
+                    event_type="process_reuse",
+                    filename=filename,
+                    message=f"Reused ClickHouse hour for {filename}",
+                )
+                processed += 1
+                if limit is not None and processed >= limit:
+                    break
+                continue
             processed_path = self._config.processed_root / processed_relative_path(
                 filename
             )
@@ -338,7 +364,11 @@ class RelayWorker:
                     },
                 )
 
-            if processed_path.exists() and processed_path.stat().st_size > 0:
+            if (
+                self._clickhouse is None
+                and processed_path.exists()
+                and processed_path.stat().st_size > 0
+            ):
                 self._index.mark_sharded(filename)
                 if self._skip_prebuild:
                     self._record_event(
@@ -405,7 +435,19 @@ class RelayWorker:
                     filename,
                     raw_path,
                     progress_callback=report_progress,
-                    skip_filtered=self._skip_prebuild,
+                    skip_filtered=self._skip_prebuild or self._clickhouse is not None,
+                    write_processed=self._clickhouse is None,
+                    batch_sink=(
+                        None
+                        if self._clickhouse is None
+                        else lambda hour, batch, filename=filename: (
+                            self._clickhouse.insert_batch(
+                                filename=filename,
+                                hour=hour,
+                                batch=batch,
+                            )
+                        )
+                    ),
                 )
             except Exception as exc:  # noqa: BLE001
                 self._index.mark_process_error(filename, str(exc))
@@ -420,7 +462,27 @@ class RelayWorker:
                 continue
 
             self._index.mark_sharded(filename)
-            if self._skip_prebuild:
+            if self._clickhouse is not None:
+                self._index.mark_prebuilt(
+                    filename,
+                    filtered_artifact_count=result.filtered_group_count,
+                )
+                self._record_event(
+                    level="INFO",
+                    event_type="process_complete",
+                    filename=filename,
+                    message=f"Ingested {filename} into ClickHouse",
+                    payload={
+                        "filtered_rows": result.total_filtered_rows,
+                        "filtered_groups": result.filtered_group_count,
+                    },
+                )
+                LOG.info(
+                    "Ingested %s into ClickHouse with %s groups",
+                    filename,
+                    result.filtered_group_count,
+                )
+            elif self._skip_prebuild:
                 self._record_event(
                     level="INFO",
                     event_type="process_complete",

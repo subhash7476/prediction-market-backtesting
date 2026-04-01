@@ -33,7 +33,12 @@ Relay VPS statistics:
 [![PMXT file](https://209-209-10-83.sslip.io/v1/badge/prebuild-file.svg?v=1)](https://209-209-10-83.sslip.io/v1/events?limit=50)
 [![PMXT rows](https://209-209-10-83.sslip.io/v1/badge/prebuild-progress.svg?v=1)](https://209-209-10-83.sslip.io/v1/events?limit=50)
 
-If the processing rate fulls under 1 hr/hr, then that means the VPS will never catch up. Since this project became a lot more popular that I had expected, I may have to switch to something more sustainable like AWS. Still figuring this out.
+Relay VPS is under construction right now. The old tiny-file filtered pipeline
+is being retired in favor of a raw-hour -> ClickHouse pipeline that does not
+spray millions of tiny parquet files across the VPS. In the meantime, the PMXT
+runners support BYOD/local sources through the shared
+`backtests/_shared/data_sources/` package and the setup notes in
+[`docs/pmxt-byod.md`](docs/pmxt-byod.md).
 
 
 ## Note: This is still in development
@@ -228,6 +233,9 @@ data are:
 
 ### PMXT Polymarket L2
 
+- PMXT input selection now lives in the shared runner-side
+  `backtests/_shared/data_sources/` package instead of being tied to one public
+  relay path.
 - Public Polymarket PMXT runners now default to the public relay at
   `https://209-209-10-83.sslip.io`.
 - For each required hour, the loader tries the relay first:
