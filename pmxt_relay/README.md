@@ -316,24 +316,30 @@ The shipped units are hardened for public deployment:
 
 ## Memory Tuning
 
-The prebuild service is the heaviest consumer. Each hourly parquet file
-contains ~30M rows spread across thousands of `(condition_id, token_id)`
-partitions. Materializing one hour can use 3-4 GB of RAM.
+On the ClickHouse-backed path, `clickhouse-server` is usually the hottest
+process on the box. That is normal during large inserts, background merges, or
+I/O wait, and it is why `/v1/system` can report `cpu_percent=100` even while
+the API is healthy.
 
-On a 6 GB VPS the safe configuration is:
+The legacy prebuild path is still the biggest one-shot RAM spike. Each hourly
+parquet file contains ~30M rows spread across thousands of
+`(condition_id, token_id)` partitions, and materializing one hour can use 3-4
+GB of RAM.
+
+On a 6 GB VPS the conservative service limits are:
 
 | Service  | `MemoryMax` | `MemorySwapMax` | Notes                            |
 |----------|-------------|-----------------|----------------------------------|
-| Worker   | 2500M       | 512M            | Mirror + shard only, no prebuild |
-| Prebuild | 4500M       | 486M            | One hour at a time               |
+| Worker   | 2500M       | 512M            | Mirror + ClickHouse ingest       |
+| Prebuild | 4500M       | 486M            | Legacy one-hour fanout           |
 
-Key env vars that control memory:
+Key env vars that still matter:
 
 - `PMXT_RELAY_DUCKDB_MEMORY_LIMIT` - DuckDB query memory cap (set to ~25% of
   total RAM when two services run concurrently)
 - `PMXT_RELAY_DUCKDB_THREADS` - DuckDB parallelism (lower = less peak memory)
 - `PMXT_RELAY_FILTERED_WORKERS` - concurrent partition materializers in the
-  prebuild step (keep at 1 on low-RAM machines)
+  legacy prebuild step (keep at 1 on low-RAM machines)
 
 The systemd units in `systemd/` include `MemoryMax` to prevent OOM kills from
 crashing the whole machine. If a service hits its limit, systemd kills just

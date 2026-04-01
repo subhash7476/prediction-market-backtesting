@@ -426,11 +426,14 @@ Relay progress can be checked over HTTP:
   `/v1/badge/prebuild-file`, `/v1/badge/prebuild-progress`, `/v1/badge/cpu`,
   `/v1/badge/mem`, and `/v1/badge/disk` for the live README status tags
 
-The relay mirrors the full PMXT archive and stores a single processed shard per
-hour alongside a background-prebuilt filtered cache. Any single PMXT backtest only
-downloads the tiny per-`(condition_id, token_id, hour)` slices it needs. The
+The relay mirrors the full PMXT archive, keeps the raw hourly parquet files on
+disk, and writes query-ready filtered rows into ClickHouse instead of fanning
+back out into millions of tiny parquet files. Any single PMXT backtest can keep
+asking for the same filtered market-hour slices over HTTP while the backend
+serves them from ClickHouse rather than a fragile filesystem shard tree. The
 point is that one backtest no longer has to scan or download the global hourly
-archive file just to recover one market.
+archive file just to recover one market, and the VPS no longer has to carry the
+old tiny-file explosion to make that possible.
 The first full backfill is still limited by preprocessing throughput, not by
 serving speed, but once a given hour has been processed the relay path is far
 cheaper than raw archive scanning.
