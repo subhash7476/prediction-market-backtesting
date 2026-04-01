@@ -1,8 +1,7 @@
 [Unit]
 Description=PMXT relay HTTP API
-After=network-online.target clickhouse-server.service
-Requires=clickhouse-server.service
-Wants=network-online.target
+After=network-online.target
+Wants=network-online.target clickhouse-server.service
 
 [Service]
 Type=simple
