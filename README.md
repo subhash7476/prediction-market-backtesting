@@ -40,6 +40,8 @@ custom exchange adapters. Plotting is inspired by [minitrade](https://github.com
 
 ![Charting preview](https://raw.githubusercontent.com/evan-kolberg/prediction-market-backtesting/main/docs/assets/charting-preview.jpeg)
 
+Detailed guides have been filed away in the [docs index](docs/index.md) for better organization and long-term sustainability.
+
 ## Table of Contents
 
 - [Docs Index](docs/index.md)
