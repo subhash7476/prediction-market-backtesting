@@ -134,25 +134,27 @@ class ClickHouseRelay:
         escaped = self._escape(filename)
         payload = self._execute_query(
             f"""
-            SELECT count()
+            SELECT 1
             FROM {self._database}.{self._hours_table}
             WHERE filename = '{escaped}'
+            LIMIT 1
             FORMAT TabSeparated
             """
         )
-        return int(payload.decode().strip() or "0") > 0
+        return payload.decode().strip() == "1"
 
     def hour_data_exists(self, filename: str) -> bool:
         escaped = self._escape(filename)
         payload = self._execute_query(
             f"""
-            SELECT count()
+            SELECT 1
             FROM {self._database}.{self._table}
             WHERE filename = '{escaped}'
+            LIMIT 1
             FORMAT TabSeparated
             """
         )
-        return int(payload.decode().strip() or "0") > 0
+        return payload.decode().strip() == "1"
 
     def hour_group_count(self, filename: str) -> int:
         escaped = self._escape(filename)
@@ -323,12 +325,18 @@ class ClickHouseRelay:
             f"""
             SELECT
                 filename,
-                formatDateTime(hour, '%Y-%m-%dT%H:00:00+00:00', 'UTC') AS hour,
-                count() AS row_count
-            FROM {self._database}.{self._table}
-            WHERE {" AND ".join(clauses)}
-            GROUP BY filename, hour
-            ORDER BY hour
+                formatDateTime(hour_start, '%Y-%m-%dT%H:00:00+00:00', 'UTC') AS hour_label,
+                row_count
+            FROM (
+                SELECT
+                    filename,
+                    min(hour) AS hour_start,
+                    count() AS row_count
+                FROM {self._database}.{self._table}
+                WHERE {" AND ".join(clauses)}
+                GROUP BY filename
+            )
+            ORDER BY hour_start
             FORMAT JSONEachRow
             """
         )
@@ -340,7 +348,7 @@ class ClickHouseRelay:
             rows.append(
                 FilteredHourEntry(
                     filename=str(row["filename"]),
-                    hour=str(row["hour"]),
+                    hour=str(row["hour_label"]),
                     row_count=int(row["row_count"]),
                     byte_size=None,
                 )

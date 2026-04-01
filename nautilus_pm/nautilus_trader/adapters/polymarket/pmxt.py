@@ -12,8 +12,10 @@ from concurrent.futures import Future
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import suppress
 from datetime import UTC
+from io import BytesIO
 from pathlib import Path
 from urllib.parse import quote
+from urllib.request import urlopen
 
 import fsspec
 import msgspec
@@ -465,7 +467,10 @@ class PolymarketPMXTDataLoader(PolymarketDataLoader):
             return None
         except Exception:
             self._reset_http_filesystem()
-            return None
+            return self._load_relay_market_batches_via_download(
+                relay_url,
+                batch_size=batch_size,
+            )
 
         try:
             scanner = dataset.scanner(
@@ -475,6 +480,38 @@ class PolymarketPMXTDataLoader(PolymarketDataLoader):
             return list(scanner.to_batches())
         except Exception:
             self._reset_http_filesystem()
+            return self._load_relay_market_batches_via_download(
+                relay_url,
+                batch_size=batch_size,
+            )
+
+    def _load_relay_market_batches_via_download(
+        self,
+        relay_url: str,
+        *,
+        batch_size: int,
+    ) -> list[pa.RecordBatch] | None:
+        try:
+            with urlopen(relay_url) as response:  # noqa: S310
+                payload = response.read()
+        except FileNotFoundError:
+            return None
+        except OSError as exc:
+            if "404" in str(exc):
+                return None
+            return None
+        except Exception:
+            return None
+
+        try:
+            parquet_file = pq.ParquetFile(BytesIO(payload))
+            return list(
+                parquet_file.iter_batches(
+                    batch_size=batch_size,
+                    columns=self._PMXT_COLUMNS,
+                )
+            )
+        except (OSError, ValueError, pa.ArrowException):
             return None
 
     def _filter_table_to_token(self, table: pa.Table) -> pa.Table:

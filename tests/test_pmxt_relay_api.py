@@ -599,6 +599,41 @@ def test_system_endpoints_return_live_metrics_and_svg(tmp_path: Path):
                     "cpu_percent": 12.5,
                     "mem_percent": 34.0,
                     "disk_percent": 56.5,
+                    "iowait_percent": 7.5,
+                    "services": {
+                        "api": {
+                            "service_name": "pmxt-relay-api.service",
+                            "label": "Relay API",
+                            "active_state": "active",
+                            "sub_state": "running",
+                            "pid": 111,
+                            "cpu_percent": 1.5,
+                        },
+                        "worker": {
+                            "service_name": "pmxt-relay-worker.service",
+                            "label": "Relay worker",
+                            "active_state": "active",
+                            "sub_state": "running",
+                            "pid": 222,
+                            "cpu_percent": 18.0,
+                        },
+                        "prebuild": {
+                            "service_name": "pmxt-relay-prebuild.service",
+                            "label": "Prebuild",
+                            "active_state": "inactive",
+                            "sub_state": "dead",
+                            "pid": 0,
+                            "cpu_percent": 0.0,
+                        },
+                        "clickhouse": {
+                            "service_name": "clickhouse-server.service",
+                            "label": "ClickHouse",
+                            "active_state": "active",
+                            "sub_state": "running",
+                            "pid": 333,
+                            "cpu_percent": 62.5,
+                        },
+                    },
                 },
             ):
                 metrics_response = await client.get("/v1/system")
@@ -606,14 +641,32 @@ def test_system_endpoints_return_live_metrics_and_svg(tmp_path: Path):
                 metrics_payload = await metrics_response.json()
 
                 cpu_badge = await client.get("/v1/badge/cpu.svg")
+                load_badge = await client.get("/v1/badge/load.svg")
                 mem_badge = await client.get("/v1/badge/mem.svg")
                 disk_badge = await client.get("/v1/badge/disk.svg")
+                iowait_badge = await client.get("/v1/badge/iowait.svg")
+                api_badge = await client.get("/v1/badge/api.svg")
+                worker_badge = await client.get("/v1/badge/worker.svg")
+                prebuild_badge = await client.get("/v1/badge/prebuild.svg")
+                clickhouse_badge = await client.get("/v1/badge/clickhouse.svg")
                 assert cpu_badge.status == 200
+                assert load_badge.status == 200
                 assert mem_badge.status == 200
                 assert disk_badge.status == 200
+                assert iowait_badge.status == 200
+                assert api_badge.status == 200
+                assert worker_badge.status == 200
+                assert prebuild_badge.status == 200
+                assert clickhouse_badge.status == 200
                 cpu_svg = await cpu_badge.text()
+                load_svg = await load_badge.text()
                 mem_svg = await mem_badge.text()
                 disk_svg = await disk_badge.text()
+                iowait_svg = await iowait_badge.text()
+                api_svg = await api_badge.text()
+                worker_svg = await worker_badge.text()
+                prebuild_svg = await prebuild_badge.text()
+                clickhouse_svg = await clickhouse_badge.text()
         finally:
             await client.close()
 
@@ -621,10 +674,51 @@ def test_system_endpoints_return_live_metrics_and_svg(tmp_path: Path):
             "cpu_percent": 12.5,
             "mem_percent": 34.0,
             "disk_percent": 56.5,
+            "iowait_percent": 7.5,
+            "services": {
+                "api": {
+                    "service_name": "pmxt-relay-api.service",
+                    "label": "Relay API",
+                    "active_state": "active",
+                    "sub_state": "running",
+                    "pid": 111,
+                    "cpu_percent": 1.5,
+                },
+                "worker": {
+                    "service_name": "pmxt-relay-worker.service",
+                    "label": "Relay worker",
+                    "active_state": "active",
+                    "sub_state": "running",
+                    "pid": 222,
+                    "cpu_percent": 18.0,
+                },
+                "prebuild": {
+                    "service_name": "pmxt-relay-prebuild.service",
+                    "label": "Prebuild",
+                    "active_state": "inactive",
+                    "sub_state": "dead",
+                    "pid": 0,
+                    "cpu_percent": 0.0,
+                },
+                "clickhouse": {
+                    "service_name": "clickhouse-server.service",
+                    "label": "ClickHouse",
+                    "active_state": "active",
+                    "sub_state": "running",
+                    "pid": 333,
+                    "cpu_percent": 62.5,
+                },
+            },
         }
-        assert "Relay CPU" in cpu_svg and "12.5%" in cpu_svg
+        assert "Relay load" in cpu_svg and "12.5%" in cpu_svg
+        assert "Relay load" in load_svg and "12.5%" in load_svg
         assert "Relay mem" in mem_svg and "34.0%" in mem_svg
         assert "Relay disk" in disk_svg and "56.5%" in disk_svg
+        assert "I/O wait" in iowait_svg and "7.5%" in iowait_svg
+        assert "Relay API" in api_svg and "running 1.5%" in api_svg
+        assert "Relay worker" in worker_svg and "running 18.0%" in worker_svg
+        assert "Prebuild" in prebuild_svg and "inactive" in prebuild_svg
+        assert "ClickHouse" in clickhouse_svg and "running 62.5%" in clickhouse_svg
 
     asyncio.run(scenario())
 

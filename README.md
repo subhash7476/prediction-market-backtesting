@@ -20,9 +20,15 @@
 Relay VPS statistics:
 
 [![PMXT relay](https://209-209-10-83.sslip.io/v1/badge/status.svg)](https://209-209-10-83.sslip.io/v1/stats)
-[![Relay CPU](https://209-209-10-83.sslip.io/v1/badge/cpu.svg)](https://209-209-10-83.sslip.io/v1/system)
+[![Relay load](https://209-209-10-83.sslip.io/v1/badge/load.svg)](https://209-209-10-83.sslip.io/v1/system)
+[![I/O wait](https://209-209-10-83.sslip.io/v1/badge/iowait.svg)](https://209-209-10-83.sslip.io/v1/system)
 [![Relay mem](https://209-209-10-83.sslip.io/v1/badge/mem.svg)](https://209-209-10-83.sslip.io/v1/system)
 [![Relay disk](https://209-209-10-83.sslip.io/v1/badge/disk.svg)](https://209-209-10-83.sslip.io/v1/system)
+
+[![Relay API](https://209-209-10-83.sslip.io/v1/badge/api.svg)](https://209-209-10-83.sslip.io/v1/system)
+[![Relay worker](https://209-209-10-83.sslip.io/v1/badge/worker.svg)](https://209-209-10-83.sslip.io/v1/system)
+[![Prebuild](https://209-209-10-83.sslip.io/v1/badge/prebuild.svg)](https://209-209-10-83.sslip.io/v1/system)
+[![ClickHouse](https://209-209-10-83.sslip.io/v1/badge/clickhouse.svg)](https://209-209-10-83.sslip.io/v1/system)
 
 [![PMXT mirrored](https://209-209-10-83.sslip.io/v1/badge/mirrored.svg)](https://209-209-10-83.sslip.io/v1/stats)
 [![PMXT processed](https://209-209-10-83.sslip.io/v1/badge/processed.svg)](https://209-209-10-83.sslip.io/v1/stats)

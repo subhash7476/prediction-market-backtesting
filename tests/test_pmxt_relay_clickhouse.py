@@ -87,6 +87,28 @@ def test_hour_exists_requires_completion_marker(tmp_path: Path, monkeypatch) -> 
 
     assert relay.hour_exists("polymarket_orderbook_2026-02-21T18.parquet") is False
     assert "FROM pmxt_relay.filtered_updates_hours" in queries[0]
+    assert "SELECT 1" in queries[0]
+    assert "LIMIT 1" in queries[0]
+
+
+def test_hour_data_exists_uses_lightweight_existence_query(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    relay = ClickHouseRelay(_make_config(tmp_path))
+    queries: list[str] = []
+
+    def fake_execute_query(query: str, **kwargs) -> bytes:  # type: ignore[no-untyped-def]
+        del kwargs
+        queries.append(query)
+        return b"1\n"
+
+    monkeypatch.setattr(relay, "_execute_query", fake_execute_query)
+
+    assert relay.hour_data_exists("polymarket_orderbook_2026-02-21T18.parquet") is True
+    assert "FROM pmxt_relay.filtered_updates" in queries[0]
+    assert "SELECT 1" in queries[0]
+    assert "LIMIT 1" in queries[0]
 
 
 def test_list_hours_only_returns_completed_filenames(
@@ -104,6 +126,11 @@ def test_list_hours_only_returns_completed_filenames(
 
     assert relay.list_hours("condition-a", "token-yes") == []
     assert "filtered_updates_hours" in queries[0]
+    assert "AS hour_label" in queries[0]
+    assert "GROUP BY filename" in queries[0]
+    assert "FROM (" in queries[0]
+    assert "AS hour_start" in queries[0]
+    assert "ORDER BY hour_start" in queries[0]
 
 
 def test_serve_hour_requires_completion_marker_before_streaming(

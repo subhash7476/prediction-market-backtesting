@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import time
+from io import BytesIO
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -240,6 +241,58 @@ def test_load_market_batches_falls_back_to_remote_when_relay_errors(
     assert (
         batches[0].column("data")[0].as_py()
         == '{"token_id":"token-yes-123","payload":"remote"}'
+    )
+
+
+def test_load_market_batches_falls_back_to_direct_relay_download(tmp_path, monkeypatch):
+    loader = _make_loader(tmp_path)
+    loader._pmxt_relay_base_url = "http://relay.local:8080"
+    hour = pd.Timestamp("2026-03-16T13:00:00Z")
+
+    relay_buffer = BytesIO()
+    pq.write_table(
+        pa.table(
+            {
+                "update_type": ["book_snapshot", "price_change"],
+                "data": [
+                    '{"token_id":"token-yes-123","payload":"snapshot"}',
+                    '{"token_id":"token-yes-123","payload":"delta"}',
+                ],
+            },
+        ),
+        relay_buffer,
+    )
+
+    class _Response:
+        def __init__(self, payload: bytes) -> None:
+            self._payload = payload
+
+        def __enter__(self) -> "_Response":
+            return self
+
+        def __exit__(self, exc_type, exc, tb) -> bool:
+            del exc_type, exc, tb
+            return False
+
+        def read(self) -> bytes:
+            return self._payload
+
+    def _raise_relay_dataset(*args, **kwargs):  # type: ignore[no-untyped-def]
+        raise RuntimeError("relay parquet is not random-access readable")
+
+    monkeypatch.setattr(pmxt_module.ds, "dataset", _raise_relay_dataset)
+    monkeypatch.setattr(
+        pmxt_module,
+        "urlopen",
+        lambda url: _Response(relay_buffer.getvalue()),  # type: ignore[arg-type]
+    )
+
+    batches = loader._load_market_batches(hour, batch_size=1_000)
+
+    assert batches is not None
+    assert sum(batch.num_rows for batch in batches) == 2
+    assert batches[0].column("data")[0].as_py() == (
+        '{"token_id":"token-yes-123","payload":"snapshot"}'
     )
 
 

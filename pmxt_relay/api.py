@@ -10,6 +10,8 @@ import json
 import os
 from pathlib import Path
 import shutil
+import subprocess
+import threading
 from xml.sax.saxutils import escape
 
 from aiohttp import web
@@ -49,6 +51,17 @@ _BADGE_COLOR_HEX = {
     "yellow": "#dfb317",
     "yellowgreen": "#a4a61d",
 }
+_SYSTEM_METRICS_CACHE_TTL_SECS = 2.0
+_SYSTEM_METRICS_SAMPLE_SECS = 0.2
+_SYSTEM_SERVICE_SPECS = {
+    "api": ("pmxt-relay-api.service", "Relay API"),
+    "worker": ("pmxt-relay-worker.service", "Relay worker"),
+    "prebuild": ("pmxt-relay-prebuild.service", "Prebuild"),
+    "clickhouse": ("clickhouse-server.service", "ClickHouse"),
+}
+_SYSTEM_METRICS_CACHE_LOCK = threading.Lock()
+_SYSTEM_METRICS_CACHE: dict[str, object] | None = None
+_SYSTEM_METRICS_CACHE_AT = 0.0
 
 
 def _badge_color_hex(color: str) -> str:
@@ -137,10 +150,146 @@ def _disk_percent(path: Path) -> float:
 
 
 def _system_metrics_snapshot(config: RelayConfig) -> dict[str, float]:
+    global _SYSTEM_METRICS_CACHE
+    global _SYSTEM_METRICS_CACHE_AT
+
+    now = time.monotonic()
+    with _SYSTEM_METRICS_CACHE_LOCK:
+        cached = _SYSTEM_METRICS_CACHE
+        if (
+            cached is not None
+            and (now - _SYSTEM_METRICS_CACHE_AT) <= _SYSTEM_METRICS_CACHE_TTL_SECS
+        ):
+            return _clone_system_metrics_snapshot(cached)
+
+        snapshot = _sample_system_metrics_snapshot(config)
+        _SYSTEM_METRICS_CACHE = _clone_system_metrics_snapshot(snapshot)
+        _SYSTEM_METRICS_CACHE_AT = now
+        return _clone_system_metrics_snapshot(snapshot)
+
+
+def _clone_system_metrics_snapshot(snapshot: dict[str, object]) -> dict[str, object]:
+    services = {
+        key: dict(value) for key, value in dict(snapshot.get("services") or {}).items()
+    }
+    clone = dict(snapshot)
+    clone["services"] = services
+    return clone
+
+
+def _read_proc_stat_totals() -> tuple[int, int]:
+    first_line = Path("/proc/stat").read_text().splitlines()[0]
+    parts = first_line.split()
+    values = [int(value) for value in parts[1:]]
+    total = sum(values)
+    iowait = values[4] if len(values) > 4 else 0
+    return total, iowait
+
+
+def _read_process_cpu_jiffies(pid: int) -> int | None:
+    try:
+        stat_text = Path(f"/proc/{pid}/stat").read_text()
+    except OSError:
+        return None
+
+    after_name = stat_text[stat_text.rfind(")") + 2 :]
+    fields = after_name.split()
+    if len(fields) <= 12:
+        return None
+    return int(fields[11]) + int(fields[12])
+
+
+def _read_systemd_service_state(service_name: str) -> dict[str, str]:
+    try:
+        result = subprocess.run(
+            [
+                "systemctl",
+                "show",
+                "--property=MainPID",
+                "--property=ActiveState",
+                "--property=SubState",
+                service_name,
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=2,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return {
+            "MainPID": "0",
+            "ActiveState": "unknown",
+            "SubState": "unknown",
+        }
+
+    payload: dict[str, str] = {
+        "MainPID": "0",
+        "ActiveState": "unknown",
+        "SubState": "unknown",
+    }
+    for line in result.stdout.splitlines():
+        if "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        payload[key] = value
+    return payload
+
+
+def _sample_system_metrics_snapshot(config: RelayConfig) -> dict[str, object]:
+    services: dict[str, dict[str, object]] = {}
+    for key, (service_name, label) in _SYSTEM_SERVICE_SPECS.items():
+        state = _read_systemd_service_state(service_name)
+        raw_pid = state.get("MainPID", "0").strip()
+        try:
+            pid = max(0, int(raw_pid))
+        except ValueError:
+            pid = 0
+        services[key] = {
+            "service_name": service_name,
+            "label": label,
+            "active_state": state.get("ActiveState", "unknown"),
+            "sub_state": state.get("SubState", "unknown"),
+            "pid": pid,
+            "cpu_percent": 0.0,
+        }
+
+    process_cpu_before = {
+        key: _read_process_cpu_jiffies(int(metric["pid"]))
+        for key, metric in services.items()
+        if int(metric["pid"]) > 0
+    }
+    total_before, iowait_before = _read_proc_stat_totals()
+    time.sleep(_SYSTEM_METRICS_SAMPLE_SECS)
+    total_after, iowait_after = _read_proc_stat_totals()
+    process_cpu_after = {
+        key: _read_process_cpu_jiffies(int(metric["pid"]))
+        for key, metric in services.items()
+        if int(metric["pid"]) > 0
+    }
+
+    cpu_count = os.cpu_count() or 1
+    total_delta = max(1, total_after - total_before)
+    iowait_delta = max(0, iowait_after - iowait_before)
+
+    for key, metric in services.items():
+        pid = int(metric["pid"])
+        if pid <= 0:
+            continue
+        start = process_cpu_before.get(key)
+        end = process_cpu_after.get(key)
+        if start is None or end is None or end < start:
+            continue
+        metric["cpu_percent"] = round(
+            max(0.0, ((end - start) / total_delta) * cpu_count * 100.0),
+            1,
+        )
+
     return {
         "cpu_percent": round(_cpu_percent_from_loadavg(), 1),
         "mem_percent": round(_memory_percent(), 1),
         "disk_percent": round(_disk_percent(config.data_dir), 1),
+        "iowait_percent": round((iowait_delta / total_delta) * 100.0, 1),
+        "services": services,
     }
 
 
@@ -149,6 +298,43 @@ def _system_badge_payload(label: str, percent: float) -> dict[str, object]:
         label=label,
         message=f"{percent:.1f}%",
         color=_usage_color(percent),
+    )
+
+
+def _service_badge_payload(
+    service_metrics: dict[str, object] | None,
+) -> dict[str, object]:
+    if not service_metrics:
+        return _badge_payload(label="Relay service", message="unknown", color="red")
+
+    label = str(service_metrics.get("label") or "Relay service")
+    active_state = str(service_metrics.get("active_state") or "unknown")
+    sub_state = str(service_metrics.get("sub_state") or "").strip()
+    cpu_percent = float(service_metrics.get("cpu_percent") or 0.0)
+
+    if active_state == "active":
+        state_label = sub_state or "active"
+        return _badge_payload(
+            label=label,
+            message=f"{state_label} {cpu_percent:.1f}%",
+            color="brightgreen",
+        )
+    if active_state in {"activating", "deactivating", "reloading"}:
+        return _badge_payload(
+            label=label,
+            message=active_state,
+            color="yellow",
+        )
+    if active_state == "failed":
+        return _badge_payload(
+            label=label,
+            message="failed",
+            color="red",
+        )
+    return _badge_payload(
+        label=label,
+        message=active_state,
+        color="lightgrey",
     )
 
 
@@ -730,7 +916,7 @@ async def badge_cpu_svg(request: web.Request) -> web.Response:
     config = request.app[CONFIG_APP_KEY]
     metrics = await asyncio.to_thread(_system_metrics_snapshot, config)
     return _badge_svg_response(
-        _system_badge_payload("Relay CPU", float(metrics["cpu_percent"]))
+        _system_badge_payload("Relay load", float(metrics["cpu_percent"]))
     )
 
 
@@ -747,6 +933,63 @@ async def badge_disk_svg(request: web.Request) -> web.Response:
     metrics = await asyncio.to_thread(_system_metrics_snapshot, config)
     return _badge_svg_response(
         _system_badge_payload("Relay disk", float(metrics["disk_percent"]))
+    )
+
+
+async def badge_load_svg(request: web.Request) -> web.Response:
+    return await badge_cpu_svg(request)
+
+
+async def badge_iowait_svg(request: web.Request) -> web.Response:
+    config = request.app[CONFIG_APP_KEY]
+    metrics = await asyncio.to_thread(_system_metrics_snapshot, config)
+    return _badge_svg_response(
+        _system_badge_payload("I/O wait", float(metrics["iowait_percent"]))
+    )
+
+
+def _service_metrics_for_badge(
+    metrics: dict[str, object],
+    service_key: str,
+) -> dict[str, object] | None:
+    services = metrics.get("services")
+    if not isinstance(services, dict):
+        return None
+    service_metrics = services.get(service_key)
+    if not isinstance(service_metrics, dict):
+        return None
+    return service_metrics
+
+
+async def badge_api_svg(request: web.Request) -> web.Response:
+    config = request.app[CONFIG_APP_KEY]
+    metrics = await asyncio.to_thread(_system_metrics_snapshot, config)
+    return _badge_svg_response(
+        _service_badge_payload(_service_metrics_for_badge(metrics, "api"))
+    )
+
+
+async def badge_worker_svg(request: web.Request) -> web.Response:
+    config = request.app[CONFIG_APP_KEY]
+    metrics = await asyncio.to_thread(_system_metrics_snapshot, config)
+    return _badge_svg_response(
+        _service_badge_payload(_service_metrics_for_badge(metrics, "worker"))
+    )
+
+
+async def badge_prebuild_svg(request: web.Request) -> web.Response:
+    config = request.app[CONFIG_APP_KEY]
+    metrics = await asyncio.to_thread(_system_metrics_snapshot, config)
+    return _badge_svg_response(
+        _service_badge_payload(_service_metrics_for_badge(metrics, "prebuild"))
+    )
+
+
+async def badge_clickhouse_svg(request: web.Request) -> web.Response:
+    config = request.app[CONFIG_APP_KEY]
+    metrics = await asyncio.to_thread(_system_metrics_snapshot, config)
+    return _badge_svg_response(
+        _service_badge_payload(_service_metrics_for_badge(metrics, "clickhouse"))
     )
 
 
@@ -935,8 +1178,14 @@ def create_app(config: RelayConfig) -> web.Application:
     app.router.add_get("/v1/badge/prebuild-file.svg", badge_prebuild_file_svg)
     app.router.add_get("/v1/badge/prebuild-progress.svg", badge_prebuild_progress_svg)
     app.router.add_get("/v1/badge/cpu.svg", badge_cpu_svg)
+    app.router.add_get("/v1/badge/load.svg", badge_load_svg)
     app.router.add_get("/v1/badge/mem.svg", badge_mem_svg)
     app.router.add_get("/v1/badge/disk.svg", badge_disk_svg)
+    app.router.add_get("/v1/badge/iowait.svg", badge_iowait_svg)
+    app.router.add_get("/v1/badge/api.svg", badge_api_svg)
+    app.router.add_get("/v1/badge/worker.svg", badge_worker_svg)
+    app.router.add_get("/v1/badge/prebuild.svg", badge_prebuild_svg)
+    app.router.add_get("/v1/badge/clickhouse.svg", badge_clickhouse_svg)
     app.router.add_get(
         "/v1/markets/{condition_id}/tokens/{token_id}/hours",
         list_filtered_hours,

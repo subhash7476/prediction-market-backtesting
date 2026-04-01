@@ -257,7 +257,7 @@ Expected shape in ClickHouse mode:
 - `GET /v1/inflight`
 - `GET /v1/badge/{status,backfill,mirrored,processed,rate,latest,lag,prebuild-file,prebuild-progress}`
 - `GET /v1/badge/{status,backfill,mirrored,processed,rate,latest,lag,prebuild-file,prebuild-progress}.svg`
-- `GET /v1/badge/{cpu,mem,disk}.svg`
+- `GET /v1/badge/{cpu,load,mem,disk,iowait,api,worker,prebuild,clickhouse}.svg`
 - `GET /v1/markets/{condition_id}/tokens/{token_id}/hours?start=...&end=...`
 - `GET /v1/filtered/{condition_id}/{token_id}/{filename}`
 
@@ -266,6 +266,9 @@ Progress and observability:
 - `/v1/system` CPU is based on `1-minute loadavg / cpu_count`, capped at `100`.
   A `100%` badge can reflect ClickHouse merges or I/O wait, not just pure API
   or worker CPU burn.
+- `/v1/system` also reports sampled `iowait_percent` plus per-service
+  `active_state`, `sub_state`, `pid`, and sampled `cpu_percent` for the relay
+  API, relay worker, prebuild service, and ClickHouse
 
 - `/v1/stats` includes both the total completed-hour count and a rolling
   `processed_hours_per_hour_24h` rate so stalled relay throughput is visible
