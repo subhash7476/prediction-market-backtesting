@@ -11,11 +11,13 @@ from urllib.request import Request
 from urllib.request import urlopen
 
 from pmxt_relay.archive import extract_archive_filenames
+from pmxt_relay.clickhouse import ClickHouseRelay
 from pmxt_relay.archive import fetch_archive_page
 from pmxt_relay.config import RelayConfig
 from pmxt_relay.index_db import RelayIndex
 from pmxt_relay.processor import RelayHourProcessor
 from pmxt_relay.storage import filtered_relative_path
+from pmxt_relay.storage import parse_archive_hour
 from pmxt_relay.storage import processed_relative_path
 from pmxt_relay.storage import raw_relative_path
 
@@ -39,6 +41,13 @@ class RelayWorker:
         self._skip_prebuild = skip_prebuild
         self._config.ensure_directories()
         self._index = RelayIndex(config.db_path, event_retention=config.event_retention)
+        self._clickhouse_retry_resets: set[str] = set()
+        if (
+            config.uses_clickhouse_filtered_store
+            and reset_inflight
+            and reset_process_inflight
+        ):
+            self._clickhouse_retry_resets = set(self._index.list_processing_filenames())
         reset_mirror, reset_process, reset_prebuild = self._index.initialize(
             reset_inflight=reset_inflight,
             reset_mirror_inflight=reset_mirror_inflight,
@@ -46,6 +55,17 @@ class RelayWorker:
             reset_prebuild_inflight=reset_prebuild_inflight,
         )
         self._processor = RelayHourProcessor(config)
+        self._clickhouse = (
+            ClickHouseRelay(config) if config.uses_clickhouse_filtered_store else None
+        )
+        if self._clickhouse is not None:
+            self._clickhouse.ensure_schema()
+            for row in self._index.list_completed_hours():
+                self._clickhouse.backfill_completed_hour(
+                    filename=row["filename"],
+                    hour=row["hour"],
+                    filtered_group_count=int(row["filtered_artifact_count"]),
+                )
         if reset_mirror or reset_process or reset_prebuild:
             self._record_event(
                 level="WARNING",
@@ -100,24 +120,31 @@ class RelayWorker:
 
     def run_once(self) -> int:
         discovered = self._discover_archive_hours()
+        adopted = self._adopt_local_raw_hours()
         mirrored = self._mirror_pending_hours()
         processed = self._process_pending_hours()
-        prebuilt = 0 if self._skip_prebuild else self._prebuild_filtered_hours(limit=1)
-        total = discovered + mirrored + processed + prebuilt
+        prebuilt = (
+            0
+            if self._skip_prebuild or self._clickhouse is not None
+            else self._prebuild_filtered_hours(limit=1)
+        )
+        total = discovered + adopted + mirrored + processed + prebuilt
         self._record_event(
             level="INFO",
             event_type="cycle_complete",
             message="Relay cycle complete",
             payload={
                 "discovered": discovered,
+                "adopted": adopted,
                 "mirrored": mirrored,
                 "processed": processed,
                 "prebuilt": prebuilt,
             },
         )
         LOG.info(
-            "Relay cycle complete: discovered=%s mirrored=%s processed=%s prebuilt=%s",
+            "Relay cycle complete: discovered=%s adopted=%s mirrored=%s processed=%s prebuilt=%s",
             discovered,
+            adopted,
             mirrored,
             processed,
             prebuilt,
@@ -179,6 +206,37 @@ class RelayWorker:
             page += 1
 
         return discovered
+
+    def _adopt_local_raw_hours(self) -> int:
+        adopted = 0
+        for raw_path in sorted(
+            self._config.raw_root.rglob("polymarket_orderbook_*.parquet")
+        ):
+            if not raw_path.is_file():
+                continue
+            filename = raw_path.name
+            try:
+                byte_size = raw_path.stat().st_size
+            except FileNotFoundError:
+                continue
+            changed = self._index.register_local_raw(
+                filename,
+                local_path=str(raw_path),
+                content_length=byte_size,
+                source_url=f"{self._config.raw_base_url}/{filename}",
+            )
+            if not changed:
+                continue
+            adopted += 1
+        if adopted > 0:
+            self._record_event(
+                level="INFO",
+                event_type="adopt_local_raw",
+                message=f"Adopted {adopted} existing raw hours from local disk",
+                payload={"adopted_hours": adopted},
+            )
+            LOG.info("Adopted %s existing raw hours from local disk", adopted)
+        return adopted
 
     def _mirror_pending_hours(self) -> int:
         mirrored = 0
@@ -313,6 +371,22 @@ class RelayWorker:
         ):
             filename = row["filename"]
             raw_path = Path(row["local_path"])
+            if self._clickhouse is not None and self._clickhouse.hour_exists(filename):
+                self._index.mark_sharded(filename)
+                self._index.mark_prebuilt(
+                    filename,
+                    filtered_artifact_count=self._clickhouse.hour_group_count(filename),
+                )
+                self._record_event(
+                    level="INFO",
+                    event_type="process_reuse",
+                    filename=filename,
+                    message=f"Reused ClickHouse hour for {filename}",
+                )
+                processed += 1
+                if limit is not None and processed >= limit:
+                    break
+                continue
             processed_path = self._config.processed_root / processed_relative_path(
                 filename
             )
@@ -338,7 +412,11 @@ class RelayWorker:
                     },
                 )
 
-            if processed_path.exists() and processed_path.stat().st_size > 0:
+            if (
+                self._clickhouse is None
+                and processed_path.exists()
+                and processed_path.stat().st_size > 0
+            ):
                 self._index.mark_sharded(filename)
                 if self._skip_prebuild:
                     self._record_event(
@@ -401,12 +479,38 @@ class RelayWorker:
                 payload={"raw_path": str(raw_path)},
             )
             try:
+                needs_clickhouse_reset = self._clickhouse is not None and (
+                    str(row["process_status"]) == "error"
+                    or filename in self._clickhouse_retry_resets
+                )
+                if needs_clickhouse_reset:
+                    self._clickhouse.reset_hour(filename)
+                    self._clickhouse_retry_resets.discard(filename)
                 result = self._processor.process_hour(
                     filename,
                     raw_path,
                     progress_callback=report_progress,
-                    skip_filtered=self._skip_prebuild,
+                    skip_filtered=self._skip_prebuild or self._clickhouse is not None,
+                    write_processed=self._clickhouse is None,
+                    batch_sink=(
+                        None
+                        if self._clickhouse is None
+                        else lambda hour, batch, filename=filename: (
+                            self._clickhouse.insert_batch(
+                                filename=filename,
+                                hour=hour,
+                                batch=batch,
+                            )
+                        )
+                    ),
                 )
+                if self._clickhouse is not None:
+                    self._clickhouse.mark_hour_complete(
+                        filename=filename,
+                        hour=parse_archive_hour(filename).isoformat(),
+                        filtered_group_count=result.filtered_group_count,
+                        filtered_row_count=result.total_filtered_rows,
+                    )
             except Exception as exc:  # noqa: BLE001
                 self._index.mark_process_error(filename, str(exc))
                 self._record_event(
@@ -420,7 +524,27 @@ class RelayWorker:
                 continue
 
             self._index.mark_sharded(filename)
-            if self._skip_prebuild:
+            if self._clickhouse is not None:
+                self._index.mark_prebuilt(
+                    filename,
+                    filtered_artifact_count=result.filtered_group_count,
+                )
+                self._record_event(
+                    level="INFO",
+                    event_type="process_complete",
+                    filename=filename,
+                    message=f"Ingested {filename} into ClickHouse",
+                    payload={
+                        "filtered_rows": result.total_filtered_rows,
+                        "filtered_groups": result.filtered_group_count,
+                    },
+                )
+                LOG.info(
+                    "Ingested %s into ClickHouse with %s groups",
+                    filename,
+                    result.filtered_group_count,
+                )
+            elif self._skip_prebuild:
                 self._record_event(
                     level="INFO",
                     event_type="process_complete",

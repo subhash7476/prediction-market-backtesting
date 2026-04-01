@@ -29,7 +29,6 @@ def test_relay_index_events_and_queue_summary(tmp_path: Path):
     queue = index.queue_summary()
     assert queue["mirror_processing"] == 1
     assert queue["process_processing"] == 1
-    assert queue["prebuild_processing"] == 0
     assert queue["process_ready"] == 0
 
     index.log_event(level="INFO", event_type="first", message="first message")
@@ -43,11 +42,9 @@ def test_relay_index_events_and_queue_summary(tmp_path: Path):
     assert len(events) == 2
     assert stats["archive_hours"] == 2
     assert stats["ready_to_process_hours"] == 0
-    assert stats["ready_to_prebuild_hours"] == 0
     assert stats["processing_hours"] == 1
     assert stats["mirror_errors"] == 0
     assert stats["process_errors"] == 0
-    assert stats["prebuild_errors"] == 0
     assert stats["last_event_at"] is not None
     assert stats["last_error_at"] is not None
 
@@ -128,9 +125,12 @@ def test_initialize_can_reset_prebuild_inflight_separately(tmp_path: Path):
     )
 
     assert reset_counts == (0, 0, 1)
-    queue = reopened.queue_summary()
-    assert queue["prebuild_pending"] == 1
-    assert queue["prebuild_processing"] == 0
+    row = reopened._conn.execute(  # noqa: SLF001
+        "SELECT prebuild_status FROM archive_hours WHERE filename = ?",
+        (filename,),
+    ).fetchone()
+    assert row is not None
+    assert row["prebuild_status"] == "pending"
 
 
 def test_list_hours_needing_process_excludes_already_processing(tmp_path: Path):
@@ -231,10 +231,7 @@ def test_mark_prebuilt_tracks_filtered_artifact_count(tmp_path: Path):
 
     stats = index.stats()
 
-    assert stats["sharded_hours"] == 1
     assert stats["processed_hours"] == 1
-    assert stats["ready_to_prebuild_hours"] == 0
-    assert stats["filtered_hours"] == 42
     assert index.list_hours_needing_filtered_prebuild() == []
 
 
@@ -317,6 +314,47 @@ def test_latest_prebuild_progress_returns_latest_progress_event(tmp_path: Path):
     assert progress.processed_rows == 512
     assert progress.total_rows == 2048
     assert progress.created_at is not None
+
+
+def test_latest_prebuild_progress_accepts_process_progress_events(tmp_path: Path):
+    index = RelayIndex(tmp_path / "relay.sqlite3")
+    index.initialize()
+
+    index.log_event(
+        level="INFO",
+        event_type="process_progress",
+        filename="polymarket_orderbook_2026-03-21T13.parquet",
+        message="latest process progress",
+        payload={"processed_rows": 768, "total_rows": 4096},
+    )
+
+    progress = index.latest_prebuild_progress()
+
+    assert progress is not None
+    assert progress.filename == "polymarket_orderbook_2026-03-21T13.parquet"
+    assert progress.processed_rows == 768
+    assert progress.total_rows == 4096
+
+
+def test_current_processing_filename_returns_active_hour(tmp_path: Path):
+    index = RelayIndex(tmp_path / "relay.sqlite3")
+    index.initialize()
+    filename = "polymarket_orderbook_2026-03-21T14.parquet"
+    index.upsert_discovered_hour(
+        filename,
+        f"https://r2.pmxt.dev/{filename}",
+        1,
+    )
+    index.mark_mirrored(
+        filename,
+        local_path="/tmp/raw.parquet",
+        etag=None,
+        content_length=None,
+        last_modified=None,
+    )
+    index.mark_processing(filename)
+
+    assert index.current_processing_filename() == filename
 
 
 def test_lock_retry_retries_until_success(tmp_path: Path, monkeypatch) -> None:
@@ -445,6 +483,48 @@ def test_error_count_deprioritizes_but_never_abandons(tmp_path: Path):
     # Clean hour comes first (error_count=0), errored hour comes last
     assert hours[0]["filename"] == filename2
     assert hours[1]["filename"] == filename
+
+
+def test_register_local_raw_adopts_existing_raw_without_resetting_processed_state(
+    tmp_path: Path,
+) -> None:
+    index = RelayIndex(tmp_path / "relay.sqlite3")
+    index.initialize()
+    filename = "polymarket_orderbook_2026-03-21T12.parquet"
+    source_url = "https://r2.pmxt.dev/" + filename
+    local_path = "/srv/pmxt-relay/raw/2026/03/21/" + filename
+    index.upsert_discovered_hour(filename, source_url, 1)
+    index.mark_mirrored(
+        filename,
+        local_path=local_path,
+        etag=None,
+        content_length=100,
+        last_modified=None,
+    )
+    index.mark_sharded(filename)
+    index.mark_prebuilt(filename, filtered_artifact_count=7)
+
+    changed = index.register_local_raw(
+        filename,
+        local_path=local_path,
+        content_length=100,
+        source_url=source_url,
+    )
+
+    row = index._conn.execute(  # noqa: SLF001
+        """
+        SELECT mirror_status, process_status, prebuild_status, filtered_artifact_count
+        FROM archive_hours
+        WHERE filename = ?
+        """,
+        (filename,),
+    ).fetchone()
+
+    assert changed is False
+    assert row["mirror_status"] == "ready"
+    assert row["process_status"] == "ready"
+    assert row["prebuild_status"] == "ready"
+    assert row["filtered_artifact_count"] == 7
 
 
 def test_mark_prebuilt_registers_artifacts_in_filtered_hours(tmp_path: Path):
@@ -633,7 +713,6 @@ def test_replace_filtered_hours_sets_all_statuses_ready(tmp_path: Path):
 
     queue = index.queue_summary()
     assert queue["process_error"] == 0
-    assert queue["prebuild_error"] == 0
     rows = index.list_filtered_for_filename(filename)
     assert len(rows) == 1
     stats = index.stats()

@@ -10,14 +10,18 @@ import json
 import os
 from pathlib import Path
 import shutil
+import subprocess
+import threading
 from xml.sax.saxutils import escape
 
 from aiohttp import web
 
 from pmxt_relay.config import RelayConfig
+from pmxt_relay.filtered_store import FilteredHourStore
+from pmxt_relay.filtered_store import create_filtered_hour_store
 from pmxt_relay.index_db import PrebuildProgress
 from pmxt_relay.index_db import RelayIndex
-from pmxt_relay.storage import parse_archive_hour
+from pmxt_relay.storage import processed_relative_path
 
 _CONDITION_ID_RE = re.compile(r"^0x[a-f0-9]{64}$", re.IGNORECASE)
 _TOKEN_ID_RE = re.compile(r"^\d+$")
@@ -47,6 +51,16 @@ _BADGE_COLOR_HEX = {
     "yellow": "#dfb317",
     "yellowgreen": "#a4a61d",
 }
+_SYSTEM_METRICS_CACHE_TTL_SECS = 2.0
+_SYSTEM_METRICS_SAMPLE_SECS = 0.2
+_SYSTEM_SERVICE_SPECS = {
+    "api": ("pmxt-relay-api.service", "API service"),
+    "worker": ("pmxt-relay-worker.service", "Worker service"),
+    "clickhouse": ("clickhouse-server.service", "ClickHouse"),
+}
+_SYSTEM_METRICS_CACHE_LOCK = threading.Lock()
+_SYSTEM_METRICS_CACHE: dict[str, object] | None = None
+_SYSTEM_METRICS_CACHE_AT = 0.0
 
 
 def _badge_color_hex(color: str) -> str:
@@ -135,10 +149,146 @@ def _disk_percent(path: Path) -> float:
 
 
 def _system_metrics_snapshot(config: RelayConfig) -> dict[str, float]:
+    global _SYSTEM_METRICS_CACHE
+    global _SYSTEM_METRICS_CACHE_AT
+
+    now = time.monotonic()
+    with _SYSTEM_METRICS_CACHE_LOCK:
+        cached = _SYSTEM_METRICS_CACHE
+        if (
+            cached is not None
+            and (now - _SYSTEM_METRICS_CACHE_AT) <= _SYSTEM_METRICS_CACHE_TTL_SECS
+        ):
+            return _clone_system_metrics_snapshot(cached)
+
+        snapshot = _sample_system_metrics_snapshot(config)
+        _SYSTEM_METRICS_CACHE = _clone_system_metrics_snapshot(snapshot)
+        _SYSTEM_METRICS_CACHE_AT = now
+        return _clone_system_metrics_snapshot(snapshot)
+
+
+def _clone_system_metrics_snapshot(snapshot: dict[str, object]) -> dict[str, object]:
+    services = {
+        key: dict(value) for key, value in dict(snapshot.get("services") or {}).items()
+    }
+    clone = dict(snapshot)
+    clone["services"] = services
+    return clone
+
+
+def _read_proc_stat_totals() -> tuple[int, int]:
+    first_line = Path("/proc/stat").read_text().splitlines()[0]
+    parts = first_line.split()
+    values = [int(value) for value in parts[1:]]
+    total = sum(values)
+    iowait = values[4] if len(values) > 4 else 0
+    return total, iowait
+
+
+def _read_process_cpu_jiffies(pid: int) -> int | None:
+    try:
+        stat_text = Path(f"/proc/{pid}/stat").read_text()
+    except OSError:
+        return None
+
+    after_name = stat_text[stat_text.rfind(")") + 2 :]
+    fields = after_name.split()
+    if len(fields) <= 12:
+        return None
+    return int(fields[11]) + int(fields[12])
+
+
+def _read_systemd_service_state(service_name: str) -> dict[str, str]:
+    try:
+        result = subprocess.run(
+            [
+                "systemctl",
+                "show",
+                "--property=MainPID",
+                "--property=ActiveState",
+                "--property=SubState",
+                service_name,
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=2,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return {
+            "MainPID": "0",
+            "ActiveState": "unknown",
+            "SubState": "unknown",
+        }
+
+    payload: dict[str, str] = {
+        "MainPID": "0",
+        "ActiveState": "unknown",
+        "SubState": "unknown",
+    }
+    for line in result.stdout.splitlines():
+        if "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        payload[key] = value
+    return payload
+
+
+def _sample_system_metrics_snapshot(config: RelayConfig) -> dict[str, object]:
+    services: dict[str, dict[str, object]] = {}
+    for key, (service_name, label) in _SYSTEM_SERVICE_SPECS.items():
+        state = _read_systemd_service_state(service_name)
+        raw_pid = state.get("MainPID", "0").strip()
+        try:
+            pid = max(0, int(raw_pid))
+        except ValueError:
+            pid = 0
+        services[key] = {
+            "service_name": service_name,
+            "label": label,
+            "active_state": state.get("ActiveState", "unknown"),
+            "sub_state": state.get("SubState", "unknown"),
+            "pid": pid,
+            "cpu_percent": 0.0,
+        }
+
+    process_cpu_before = {
+        key: _read_process_cpu_jiffies(int(metric["pid"]))
+        for key, metric in services.items()
+        if int(metric["pid"]) > 0
+    }
+    total_before, iowait_before = _read_proc_stat_totals()
+    time.sleep(_SYSTEM_METRICS_SAMPLE_SECS)
+    total_after, iowait_after = _read_proc_stat_totals()
+    process_cpu_after = {
+        key: _read_process_cpu_jiffies(int(metric["pid"]))
+        for key, metric in services.items()
+        if int(metric["pid"]) > 0
+    }
+
+    cpu_count = os.cpu_count() or 1
+    total_delta = max(1, total_after - total_before)
+    iowait_delta = max(0, iowait_after - iowait_before)
+
+    for key, metric in services.items():
+        pid = int(metric["pid"])
+        if pid <= 0:
+            continue
+        start = process_cpu_before.get(key)
+        end = process_cpu_after.get(key)
+        if start is None or end is None or end < start:
+            continue
+        metric["cpu_percent"] = round(
+            max(0.0, ((end - start) / total_delta) * cpu_count * 100.0),
+            1,
+        )
+
     return {
         "cpu_percent": round(_cpu_percent_from_loadavg(), 1),
         "mem_percent": round(_memory_percent(), 1),
         "disk_percent": round(_disk_percent(config.data_dir), 1),
+        "iowait_percent": round((iowait_delta / total_delta) * 100.0, 1),
+        "services": services,
     }
 
 
@@ -147,6 +297,75 @@ def _system_badge_payload(label: str, percent: float) -> dict[str, object]:
         label=label,
         message=f"{percent:.1f}%",
         color=_usage_color(percent),
+    )
+
+
+def _service_badge_payload(
+    service_metrics: dict[str, object] | None,
+) -> dict[str, object]:
+    if not service_metrics:
+        return _badge_payload(label="Relay service", message="unknown", color="red")
+
+    label = str(service_metrics.get("label") or "Relay service")
+    active_state = str(service_metrics.get("active_state") or "unknown")
+    sub_state = str(service_metrics.get("sub_state") or "").strip()
+
+    if active_state == "active":
+        state_label = sub_state or "active"
+        return _badge_payload(
+            label=label,
+            message=f"{state_label} busy",
+            color="brightgreen",
+        )
+    if active_state in {"activating", "deactivating", "reloading"}:
+        return _badge_payload(
+            label=label,
+            message=active_state,
+            color="yellow",
+        )
+    if active_state == "failed":
+        return _badge_payload(
+            label=label,
+            message="failed",
+            color="red",
+        )
+    return _badge_payload(
+        label=label,
+        message=active_state,
+        color="lightgrey",
+    )
+
+
+def _stage_badge_payload(
+    *,
+    label: str,
+    active_count: int,
+    queued_count: int,
+    error_count: int,
+) -> dict[str, object]:
+    if active_count > 0:
+        return _badge_payload(
+            label=label,
+            message=f"active {active_count}",
+            color="brightgreen",
+        )
+    if queued_count > 0:
+        color = "orange" if queued_count >= 100 else "yellow"
+        return _badge_payload(
+            label=label,
+            message=f"queued {queued_count}",
+            color=color,
+        )
+    if error_count > 0:
+        return _badge_payload(
+            label=label,
+            message=f"error {error_count}",
+            color="red",
+        )
+    return _badge_payload(
+        label=label,
+        message="caught up",
+        color="green",
     )
 
 
@@ -252,11 +471,11 @@ def _backfill_badge_payload(
 
     if archive_hours <= 0:
         return _badge_payload(
-            label="PMXT backfill", message="0/0 hrs", color="lightgrey"
+            label="Hours backfilled", message="0/0 hrs", color="lightgrey"
         )
 
     return _badge_payload(
-        label="PMXT backfill",
+        label="Hours backfilled",
         message=f"{processed_hours}/{archive_hours} hrs",
         color=_progress_color(numerator=processed_hours, denominator=archive_hours),
     )
@@ -285,7 +504,7 @@ def _mirrored_badge_payload(
     mirrored_hours = int(stats.get("mirrored_hours") or 0)
     archive_hours = int(stats.get("archive_hours") or 0)
     return _ratio_badge_payload(
-        label="PMXT mirrored",
+        label="Hours mirrored",
         numerator=mirrored_hours,
         denominator=archive_hours,
     )
@@ -298,7 +517,7 @@ def _processed_badge_payload(
     processed_hours = int(stats.get("processed_hours") or 0)
     mirrored_hours = int(stats.get("mirrored_hours") or 0)
     return _ratio_badge_payload(
-        label="PMXT processed",
+        label="Hours processed",
         numerator=processed_hours,
         denominator=mirrored_hours,
     )
@@ -313,7 +532,7 @@ def _latest_processed_badge_payload(
         latest_processed_hour if isinstance(latest_processed_hour, str) else None
     )
     return _badge_payload(
-        label="PMXT latest",
+        label="Latest hour",
         message=_short_hour_label(latest_label),
         color="blue",
     )
@@ -337,7 +556,7 @@ def _lag_badge_payload(
         color = "orange"
 
     return _badge_payload(
-        label="PMXT lag",
+        label="Queue lag",
         message=f"{lag_hours} hrs",
         color=color,
     )
@@ -367,41 +586,55 @@ def _rate_badge_payload(
         message = f"{rate:.2f} hr/hr"
 
     return _badge_payload(
-        label="PMXT rate",
+        label="Completion rate",
         message=message,
         color=color,
     )
 
 
-def _prebuild_file_badge_payload(
+def _file_badge_payload(
     *,
     stats: dict[str, int | str | None],
     progress: PrebuildProgress | None,
+    current_filename: str | None = None,
 ) -> dict[str, object]:
-    prebuilding_hours = int(stats.get("prebuilding_hours") or 0)
-    if prebuilding_hours <= 0:
-        return _badge_payload(label="PMXT file", message="idle", color="lightgrey")
+    processing_hours = int(stats.get("processing_hours") or 0)
+    if processing_hours <= 0:
+        return _badge_payload(label="Current file", message="idle", color="lightgrey")
+    if current_filename is not None:
+        return _badge_payload(
+            label="Current file",
+            message=current_filename,
+            color="blue",
+        )
     if progress is None:
-        return _badge_payload(label="PMXT file", message="starting", color="yellow")
+        return _badge_payload(label="Current file", message="starting", color="yellow")
     return _badge_payload(
-        label="PMXT file",
+        label="Current file",
         message=progress.filename,
         color="blue",
     )
 
 
-def _prebuild_progress_badge_payload(
+def _rows_badge_payload(
     *,
     stats: dict[str, int | str | None],
     progress: PrebuildProgress | None,
+    current_filename: str | None = None,
 ) -> dict[str, object]:
-    prebuilding_hours = int(stats.get("prebuilding_hours") or 0)
-    if prebuilding_hours <= 0:
-        return _badge_payload(label="PMXT rows", message="idle", color="lightgrey")
+    processing_hours = int(stats.get("processing_hours") or 0)
+    if processing_hours <= 0:
+        return _badge_payload(label="Rows processed", message="idle", color="lightgrey")
     if progress is None:
-        return _badge_payload(label="PMXT rows", message="starting", color="yellow")
+        return _badge_payload(
+            label="Rows processed", message="starting", color="yellow"
+        )
+    if current_filename is not None and progress.filename != current_filename:
+        return _badge_payload(
+            label="Rows processed", message="starting", color="yellow"
+        )
     return _badge_payload(
-        label="PMXT rows",
+        label="Rows processed",
         message=f"{progress.processed_rows:,} / {progress.total_rows:,}",
         color=_progress_color(
             numerator=progress.processed_rows,
@@ -462,6 +695,7 @@ class RequestRateLimiter:
 CONFIG_APP_KEY = web.AppKey("config", RelayConfig)
 INDEX_APP_KEY = web.AppKey("index", RelayIndex)
 RATE_LIMITER_APP_KEY = web.AppKey("rate_limiter", RequestRateLimiter)
+FILTERED_STORE_APP_KEY = web.AppKey("filtered_store", FilteredHourStore)
 
 
 def _client_id(
@@ -603,14 +837,56 @@ async def healthz(_request: web.Request) -> web.Response:
     return web.json_response({"ok": True})
 
 
+async def _index_stats_async(index: object) -> dict[str, object]:
+    return await asyncio.to_thread(index.stats)
+
+
+async def _index_queue_summary_async(index: object) -> dict[str, object]:
+    return await asyncio.to_thread(index.queue_summary)
+
+
+async def _index_recent_events_async(index: object, limit: int):
+    return await asyncio.to_thread(index.recent_events, limit)
+
+
+async def _index_progress_snapshot_async(
+    index: object,
+) -> tuple[dict[str, object], dict[str, object] | None, str | None]:
+    def _snapshot():
+        return (
+            index.stats(),
+            index.latest_prebuild_progress(),
+            index.current_processing_filename(),
+        )
+
+    return await asyncio.to_thread(_snapshot)
+
+
+async def _filtered_store_list_hours_async(
+    filtered_store: FilteredHourStore,
+    condition_id: str,
+    token_id: str,
+    *,
+    start_hour: str | None = None,
+    end_hour: str | None = None,
+):
+    return await asyncio.to_thread(
+        filtered_store.list_hours,
+        condition_id,
+        token_id,
+        start_hour=start_hour,
+        end_hour=end_hour,
+    )
+
+
 async def stats(request: web.Request) -> web.Response:
     index = request.app[INDEX_APP_KEY]
-    return web.json_response(index.stats())
+    return web.json_response(await _index_stats_async(index))
 
 
 async def queue(request: web.Request) -> web.Response:
     index = request.app[INDEX_APP_KEY]
-    return web.json_response(index.queue_summary())
+    return web.json_response(await _index_queue_summary_async(index))
 
 
 async def events(request: web.Request) -> web.Response:
@@ -620,7 +896,7 @@ async def events(request: web.Request) -> web.Response:
         limit = max(1, min(1000, int(limit_value)))
     except ValueError:
         limit = 100
-    rows = index.recent_events(limit=limit)
+    rows = await _index_recent_events_async(index, limit)
     payload = []
     for row in rows:
         payload.append(
@@ -654,59 +930,69 @@ async def system_metrics(request: web.Request) -> web.Response:
 async def badge_status(request: web.Request) -> web.Response:
     config = request.app[CONFIG_APP_KEY]
     index = request.app[INDEX_APP_KEY]
-    return web.json_response(_status_badge_payload(stats=index.stats(), config=config))
+    return web.json_response(
+        _status_badge_payload(stats=await _index_stats_async(index), config=config)
+    )
 
 
 async def badge_backfill(request: web.Request) -> web.Response:
     index = request.app[INDEX_APP_KEY]
-    return web.json_response(_backfill_badge_payload(stats=index.stats()))
+    return web.json_response(
+        _backfill_badge_payload(stats=await _index_stats_async(index))
+    )
 
 
 async def badge_mirrored(request: web.Request) -> web.Response:
     index = request.app[INDEX_APP_KEY]
-    return web.json_response(_mirrored_badge_payload(stats=index.stats()))
+    return web.json_response(
+        _mirrored_badge_payload(stats=await _index_stats_async(index))
+    )
 
 
 async def badge_processed(request: web.Request) -> web.Response:
     index = request.app[INDEX_APP_KEY]
-    return web.json_response(_processed_badge_payload(stats=index.stats()))
+    return web.json_response(
+        _processed_badge_payload(stats=await _index_stats_async(index))
+    )
 
 
 async def badge_latest(request: web.Request) -> web.Response:
     index = request.app[INDEX_APP_KEY]
     return web.json_response(
-        _latest_processed_badge_payload(queue=index.queue_summary())
+        _latest_processed_badge_payload(queue=await _index_queue_summary_async(index))
     )
 
 
 async def badge_lag(request: web.Request) -> web.Response:
     index = request.app[INDEX_APP_KEY]
-    return web.json_response(_lag_badge_payload(stats=index.stats()))
+    return web.json_response(_lag_badge_payload(stats=await _index_stats_async(index)))
 
 
 async def badge_rate(request: web.Request) -> web.Response:
     index = request.app[INDEX_APP_KEY]
-    return web.json_response(_rate_badge_payload(stats=index.stats()))
+    return web.json_response(_rate_badge_payload(stats=await _index_stats_async(index)))
 
 
-async def badge_prebuild_file(request: web.Request) -> web.Response:
+async def badge_file(request: web.Request) -> web.Response:
     index = request.app[INDEX_APP_KEY]
-    stats = index.stats()
+    stats, progress, current_filename = await _index_progress_snapshot_async(index)
     return web.json_response(
-        _prebuild_file_badge_payload(
+        _file_badge_payload(
             stats=stats,
-            progress=index.latest_prebuild_progress(),
+            progress=progress,
+            current_filename=current_filename,
         )
     )
 
 
-async def badge_prebuild_progress(request: web.Request) -> web.Response:
+async def badge_rows(request: web.Request) -> web.Response:
     index = request.app[INDEX_APP_KEY]
-    stats = index.stats()
+    stats, progress, current_filename = await _index_progress_snapshot_async(index)
     return web.json_response(
-        _prebuild_progress_badge_payload(
+        _rows_badge_payload(
             stats=stats,
-            progress=index.latest_prebuild_progress(),
+            progress=progress,
+            current_filename=current_filename,
         )
     )
 
@@ -715,7 +1001,7 @@ async def badge_cpu_svg(request: web.Request) -> web.Response:
     config = request.app[CONFIG_APP_KEY]
     metrics = await asyncio.to_thread(_system_metrics_snapshot, config)
     return _badge_svg_response(
-        _system_badge_payload("Relay CPU", float(metrics["cpu_percent"]))
+        _system_badge_payload("CPU load", float(metrics["cpu_percent"]))
     )
 
 
@@ -723,7 +1009,7 @@ async def badge_mem_svg(request: web.Request) -> web.Response:
     config = request.app[CONFIG_APP_KEY]
     metrics = await asyncio.to_thread(_system_metrics_snapshot, config)
     return _badge_svg_response(
-        _system_badge_payload("Relay mem", float(metrics["mem_percent"]))
+        _system_badge_payload("RAM", float(metrics["mem_percent"]))
     )
 
 
@@ -731,75 +1017,156 @@ async def badge_disk_svg(request: web.Request) -> web.Response:
     config = request.app[CONFIG_APP_KEY]
     metrics = await asyncio.to_thread(_system_metrics_snapshot, config)
     return _badge_svg_response(
-        _system_badge_payload("Relay disk", float(metrics["disk_percent"]))
+        _system_badge_payload("Disk", float(metrics["disk_percent"]))
     )
+
+
+async def badge_load_svg(request: web.Request) -> web.Response:
+    return await badge_cpu_svg(request)
+
+
+async def badge_iowait_svg(request: web.Request) -> web.Response:
+    config = request.app[CONFIG_APP_KEY]
+    metrics = await asyncio.to_thread(_system_metrics_snapshot, config)
+    return _badge_svg_response(
+        _system_badge_payload("I/O wait", float(metrics["iowait_percent"]))
+    )
+
+
+def _service_metrics_for_badge(
+    metrics: dict[str, object],
+    service_key: str,
+) -> dict[str, object] | None:
+    services = metrics.get("services")
+    if not isinstance(services, dict):
+        return None
+    service_metrics = services.get(service_key)
+    if not isinstance(service_metrics, dict):
+        return None
+    return service_metrics
+
+
+def _service_running_badge_payload(label: str) -> dict[str, object]:
+    return _badge_payload(label=label, message="running busy", color="brightgreen")
+
+
+async def badge_api_svg(request: web.Request) -> web.Response:
+    return _badge_svg_response(_service_running_badge_payload("API service"))
+
+
+async def badge_worker_svg(request: web.Request) -> web.Response:
+    return _badge_svg_response(_service_running_badge_payload("Worker service"))
+
+
+async def badge_mirroring_svg(request: web.Request) -> web.Response:
+    index = request.app[INDEX_APP_KEY]
+    queue = await _index_queue_summary_async(index)
+    return _badge_svg_response(
+        _stage_badge_payload(
+            label="Mirror service",
+            active_count=int(queue.get("mirror_processing") or 0),
+            queued_count=int(queue.get("mirror_pending") or 0),
+            error_count=int(queue.get("mirror_error") or 0),
+        )
+    )
+
+
+async def badge_processing_svg(request: web.Request) -> web.Response:
+    index = request.app[INDEX_APP_KEY]
+    queue = await _index_queue_summary_async(index)
+    return _badge_svg_response(
+        _stage_badge_payload(
+            label="Processing",
+            active_count=int(queue.get("process_processing") or 0),
+            queued_count=int(
+                (queue.get("process_ready") or 0) + (queue.get("process_pending") or 0)
+            ),
+            error_count=int(queue.get("process_error") or 0),
+        )
+    )
+
+
+async def badge_clickhouse_svg(request: web.Request) -> web.Response:
+    return _badge_svg_response(_service_running_badge_payload("ClickHouse"))
 
 
 async def badge_status_svg(request: web.Request) -> web.Response:
     config = request.app[CONFIG_APP_KEY]
     index = request.app[INDEX_APP_KEY]
     return _badge_svg_response(
-        _status_badge_payload(stats=index.stats(), config=config)
+        _status_badge_payload(stats=await _index_stats_async(index), config=config)
     )
 
 
 async def badge_backfill_svg(request: web.Request) -> web.Response:
     index = request.app[INDEX_APP_KEY]
-    return _badge_svg_response(_backfill_badge_payload(stats=index.stats()))
+    return _badge_svg_response(
+        _backfill_badge_payload(stats=await _index_stats_async(index))
+    )
 
 
 async def badge_mirrored_svg(request: web.Request) -> web.Response:
     index = request.app[INDEX_APP_KEY]
-    return _badge_svg_response(_mirrored_badge_payload(stats=index.stats()))
+    return _badge_svg_response(
+        _mirrored_badge_payload(stats=await _index_stats_async(index))
+    )
 
 
 async def badge_processed_svg(request: web.Request) -> web.Response:
     index = request.app[INDEX_APP_KEY]
-    return _badge_svg_response(_processed_badge_payload(stats=index.stats()))
+    return _badge_svg_response(
+        _processed_badge_payload(stats=await _index_stats_async(index))
+    )
 
 
 async def badge_latest_svg(request: web.Request) -> web.Response:
     index = request.app[INDEX_APP_KEY]
     return _badge_svg_response(
-        _latest_processed_badge_payload(queue=index.queue_summary())
+        _latest_processed_badge_payload(queue=await _index_queue_summary_async(index))
     )
 
 
 async def badge_lag_svg(request: web.Request) -> web.Response:
     index = request.app[INDEX_APP_KEY]
-    return _badge_svg_response(_lag_badge_payload(stats=index.stats()))
+    return _badge_svg_response(
+        _lag_badge_payload(stats=await _index_stats_async(index))
+    )
 
 
 async def badge_rate_svg(request: web.Request) -> web.Response:
     index = request.app[INDEX_APP_KEY]
-    return _badge_svg_response(_rate_badge_payload(stats=index.stats()))
-
-
-async def badge_prebuild_file_svg(request: web.Request) -> web.Response:
-    index = request.app[INDEX_APP_KEY]
-    stats = index.stats()
     return _badge_svg_response(
-        _prebuild_file_badge_payload(
+        _rate_badge_payload(stats=await _index_stats_async(index))
+    )
+
+
+async def badge_file_svg(request: web.Request) -> web.Response:
+    index = request.app[INDEX_APP_KEY]
+    stats, progress, current_filename = await _index_progress_snapshot_async(index)
+    return _badge_svg_response(
+        _file_badge_payload(
             stats=stats,
-            progress=index.latest_prebuild_progress(),
+            progress=progress,
+            current_filename=current_filename,
         )
     )
 
 
-async def badge_prebuild_progress_svg(request: web.Request) -> web.Response:
+async def badge_rows_svg(request: web.Request) -> web.Response:
     index = request.app[INDEX_APP_KEY]
-    stats = index.stats()
+    stats, progress, current_filename = await _index_progress_snapshot_async(index)
     return _badge_svg_response(
-        _prebuild_progress_badge_payload(
+        _rows_badge_payload(
             stats=stats,
-            progress=index.latest_prebuild_progress(),
+            progress=progress,
+            current_filename=current_filename,
         )
     )
 
 
 async def list_filtered_hours(request: web.Request) -> web.Response:
-    index = request.app[INDEX_APP_KEY]
     config = request.app[CONFIG_APP_KEY]
+    filtered_store = request.app[FILTERED_STORE_APP_KEY]
     condition_id = request.match_info["condition_id"]
     token_id = request.match_info["token_id"]
     if not _CONDITION_ID_RE.fullmatch(condition_id) or not _TOKEN_ID_RE.fullmatch(
@@ -808,26 +1175,19 @@ async def list_filtered_hours(request: web.Request) -> web.Response:
         raise web.HTTPNotFound(text="filtered hours not found")
     start_hour = _iso_hour_query(request.query.get("start"))
     end_hour = _iso_hour_query(request.query.get("end"))
-    rows = index.list_filtered_hours(
+    rows = await _filtered_store_list_hours_async(
+        filtered_store,
         condition_id,
         token_id,
         start_hour=start_hour,
         end_hour=end_hour,
     )
-    if not rows:
-        rows = _scan_filtered_hours(
-            config,
-            condition_id,
-            token_id,
-            start_hour=start_hour,
-            end_hour=end_hour,
-        )
     truncated = len(rows) > config.api_list_max_hours
     if truncated:
         rows = rows[: config.api_list_max_hours]
     entries = []
     for row in rows:
-        relative_url = f"/v1/filtered/{condition_id}/{token_id}/{row['filename']}"
+        relative_url = f"/v1/filtered/{condition_id}/{token_id}/{row.filename}"
         url = (
             f"{config.public_base_url}{relative_url}"
             if config.public_base_url is not None
@@ -835,10 +1195,10 @@ async def list_filtered_hours(request: web.Request) -> web.Response:
         )
         entries.append(
             {
-                "hour": row["hour"],
-                "filename": row["filename"],
-                "row_count": row["row_count"],
-                "byte_size": row["byte_size"],
+                "hour": row.hour,
+                "filename": row.filename,
+                "row_count": row.row_count,
+                "byte_size": row.byte_size,
                 "url": url,
             }
         )
@@ -852,56 +1212,29 @@ async def list_filtered_hours(request: web.Request) -> web.Response:
     )
 
 
-def _scan_filtered_hours(
-    config: RelayConfig,
-    condition_id: str,
-    token_id: str,
-    *,
-    start_hour: str | None = None,
-    end_hour: str | None = None,
-) -> list[dict[str, object]]:
-    token_root = config.filtered_root / condition_id / token_id
-    if not token_root.exists():
-        return []
-
-    entries: list[dict[str, object]] = []
-    for path in sorted(token_root.glob("polymarket_orderbook_*.parquet")):
-        hour = parse_archive_hour(path.name).isoformat()
-        if start_hour is not None and hour < start_hour:
-            continue
-        if end_hour is not None and hour > end_hour:
-            continue
-        try:
-            byte_size = path.stat().st_size
-        except FileNotFoundError:
-            continue
-        entries.append(
-            {
-                "filename": path.name,
-                "hour": hour,
-                "row_count": None,
-                "byte_size": byte_size,
-            }
-        )
-    return entries
-
-
 async def serve_filtered(request: web.Request) -> web.StreamResponse:
     config = request.app[CONFIG_APP_KEY]
+    filtered_store = request.app[FILTERED_STORE_APP_KEY]
     condition_id = request.match_info["condition_id"]
     token_id = request.match_info["token_id"]
     filename = request.match_info["filename"]
-    cache_path = _resolve_filtered_path(config, condition_id, token_id, filename)
-    if cache_path is None:
+    if not _CONDITION_ID_RE.fullmatch(condition_id):
         raise web.HTTPNotFound(text="filtered hour not found")
-
-    if not cache_path.exists():
-        # Don't scan the full processed parquet on the fly — it pegs the CPU
-        # and blocks prebuild progress. Let the client fall back to r2.pmxt.dev.
-        raise web.HTTPNotFound(text="filtered hour not yet prebuilt")
-
-    response = web.FileResponse(cache_path)
-    response.headers["Cache-Control"] = _CACHE_CONTROL_FILE
+    if not _TOKEN_ID_RE.fullmatch(token_id):
+        raise web.HTTPNotFound(text="filtered hour not found")
+    if not _FILTERED_FILENAME_RE.fullmatch(filename):
+        raise web.HTTPNotFound(text="filtered hour not found")
+    response = await filtered_store.serve_hour(
+        request,
+        condition_id=condition_id,
+        token_id=token_id,
+        filename=filename,
+    )
+    if response is None:
+        processed_path = config.processed_root / processed_relative_path(filename)
+        if processed_path.exists():
+            raise web.HTTPNotFound(text="filtered hour not yet prebuilt")
+        raise web.HTTPNotFound(text="filtered hour not found")
     return response
 
 
@@ -922,11 +1255,11 @@ def create_app(config: RelayConfig) -> web.Application:
         middlewares=[hardening_middleware],
     )
     app[CONFIG_APP_KEY] = config
-    app[INDEX_APP_KEY] = RelayIndex(
-        config.db_path, event_retention=config.event_retention
-    )
+    index = RelayIndex(config.db_path, event_retention=config.event_retention)
+    app[INDEX_APP_KEY] = index
+    app[FILTERED_STORE_APP_KEY] = create_filtered_hour_store(config, index)
     app[RATE_LIMITER_APP_KEY] = RequestRateLimiter(config.api_rate_limit_per_minute)
-    app[INDEX_APP_KEY].initialize(apply_maintenance=False)
+    index.initialize(apply_maintenance=False)
     app.on_response_prepare.append(on_prepare_response)
     app.router.add_get("/healthz", healthz)
     app.router.add_get("/v1/stats", stats)
@@ -941,8 +1274,8 @@ def create_app(config: RelayConfig) -> web.Application:
     app.router.add_get("/v1/badge/latest", badge_latest)
     app.router.add_get("/v1/badge/lag", badge_lag)
     app.router.add_get("/v1/badge/rate", badge_rate)
-    app.router.add_get("/v1/badge/prebuild-file", badge_prebuild_file)
-    app.router.add_get("/v1/badge/prebuild-progress", badge_prebuild_progress)
+    app.router.add_get("/v1/badge/file", badge_file)
+    app.router.add_get("/v1/badge/rows", badge_rows)
     app.router.add_get("/v1/badge/status.svg", badge_status_svg)
     app.router.add_get("/v1/badge/backfill.svg", badge_backfill_svg)
     app.router.add_get("/v1/badge/mirrored.svg", badge_mirrored_svg)
@@ -950,11 +1283,18 @@ def create_app(config: RelayConfig) -> web.Application:
     app.router.add_get("/v1/badge/latest.svg", badge_latest_svg)
     app.router.add_get("/v1/badge/lag.svg", badge_lag_svg)
     app.router.add_get("/v1/badge/rate.svg", badge_rate_svg)
-    app.router.add_get("/v1/badge/prebuild-file.svg", badge_prebuild_file_svg)
-    app.router.add_get("/v1/badge/prebuild-progress.svg", badge_prebuild_progress_svg)
+    app.router.add_get("/v1/badge/file.svg", badge_file_svg)
+    app.router.add_get("/v1/badge/rows.svg", badge_rows_svg)
     app.router.add_get("/v1/badge/cpu.svg", badge_cpu_svg)
+    app.router.add_get("/v1/badge/load.svg", badge_load_svg)
     app.router.add_get("/v1/badge/mem.svg", badge_mem_svg)
     app.router.add_get("/v1/badge/disk.svg", badge_disk_svg)
+    app.router.add_get("/v1/badge/iowait.svg", badge_iowait_svg)
+    app.router.add_get("/v1/badge/api.svg", badge_api_svg)
+    app.router.add_get("/v1/badge/worker.svg", badge_worker_svg)
+    app.router.add_get("/v1/badge/mirroring.svg", badge_mirroring_svg)
+    app.router.add_get("/v1/badge/processing.svg", badge_processing_svg)
+    app.router.add_get("/v1/badge/clickhouse.svg", badge_clickhouse_svg)
     app.router.add_get(
         "/v1/markets/{condition_id}/tokens/{token_id}/hours",
         list_filtered_hours,

@@ -461,6 +461,75 @@ class RelayIndex:
             )
         )
 
+    def register_local_raw(
+        self,
+        filename: str,
+        *,
+        local_path: str,
+        content_length: int | None,
+        source_url: str,
+        archive_page: int = 0,
+    ) -> bool:
+        hour = parse_archive_hour(filename).isoformat()
+
+        def operation() -> bool:
+            with self._conn:
+                insert_cursor = self._conn.execute(
+                    """
+                    INSERT OR IGNORE INTO archive_hours (
+                        filename,
+                        hour,
+                        source_url,
+                        archive_page,
+                        discovered_at,
+                        local_path,
+                        content_length,
+                        mirror_status,
+                        mirrored_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, 'ready', ?)
+                    """,
+                    (
+                        filename,
+                        hour,
+                        source_url,
+                        archive_page,
+                        _utc_now(),
+                        local_path,
+                        content_length,
+                        _utc_now(),
+                    ),
+                )
+                update_cursor = self._conn.execute(
+                    """
+                    UPDATE archive_hours
+                    SET
+                        source_url = ?,
+                        local_path = ?,
+                        content_length = COALESCE(content_length, ?),
+                        mirror_status = 'ready',
+                        mirrored_at = COALESCE(mirrored_at, ?)
+                    WHERE filename = ?
+                      AND (
+                        local_path IS NULL
+                        OR local_path != ?
+                        OR mirror_status != 'ready'
+                        OR (content_length IS NULL AND ? IS NOT NULL)
+                      )
+                    """,
+                    (
+                        source_url,
+                        local_path,
+                        content_length,
+                        _utc_now(),
+                        filename,
+                        local_path,
+                        content_length,
+                    ),
+                )
+            return insert_cursor.rowcount > 0 or update_cursor.rowcount > 0
+
+        return self._run_with_lock_retry(operation)
+
     def list_hours_needing_process(
         self,
         *,
@@ -478,6 +547,21 @@ class RelayIndex:
             statuses,
         )
         return cursor.fetchall()
+
+    def list_processing_filenames(self) -> list[str]:
+        cursor = self._conn.execute(
+            """
+            SELECT filename
+            FROM archive_hours
+            WHERE process_status = 'processing'
+            ORDER BY hour
+            """
+        )
+        return [
+            str(row["filename"])
+            for row in cursor.fetchall()
+            if isinstance(row["filename"], str)
+        ]
 
     def mark_processing(self, filename: str) -> None:
         self._run_with_lock_retry(
@@ -682,6 +766,19 @@ class RelayIndex:
         )
         return cursor.fetchall()
 
+    def list_completed_hours(self) -> list[sqlite3.Row]:
+        cursor = self._conn.execute(
+            """
+            SELECT filename, hour, filtered_artifact_count
+            FROM archive_hours
+            WHERE mirror_status = 'ready'
+              AND process_status = 'ready'
+              AND prebuild_status = 'ready'
+            ORDER BY hour
+            """
+        )
+        return cursor.fetchall()
+
     def list_filtered_for_filename(self, filename: str) -> list[sqlite3.Row]:
         cursor = self._conn.execute(
             """
@@ -773,15 +870,6 @@ class RelayIndex:
             FROM archive_hours
             """
         ).fetchone()
-        filtered_hours = self._conn.execute(
-            """
-            SELECT COALESCE(
-                NULLIF(SUM(filtered_artifact_count), 0),
-                (SELECT COUNT(*) FROM filtered_hours)
-            )
-            FROM archive_hours
-            """
-        ).fetchone()[0]
         last_event_at = self._conn.execute(
             "SELECT MAX(created_at) FROM relay_events"
         ).fetchone()[0]
@@ -791,17 +879,11 @@ class RelayIndex:
         payload = {
             "archive_hours": row["archive_hours"],
             "mirrored_hours": row["mirrored_hours"],
-            "sharded_hours": row["sharded_hours"],
             "processed_hours": row["processed_hours"],
             "ready_to_process_hours": row["ready_to_process_hours"],
-            "ready_to_prebuild_hours": row["ready_to_prebuild_hours"],
             "processing_hours": row["processing_hours"],
-            "sharding_hours": row["sharding_hours"],
-            "prebuilding_hours": row["prebuilding_hours"],
             "mirror_errors": row["mirror_errors"],
             "process_errors": row["shard_errors"],
-            "prebuild_errors": row["prebuild_errors"],
-            "filtered_hours": filtered_hours,
             "last_event_at": last_event_at,
             "last_error_at": last_error_at,
         }
@@ -824,12 +906,34 @@ class RelayIndex:
                 SUM(CASE WHEN prebuild_status = 'processing' THEN 1 ELSE 0 END) AS prebuild_processing,
                 SUM(CASE WHEN prebuild_status = 'error' THEN 1 ELSE 0 END) AS prebuild_error,
                 MAX(CASE WHEN mirror_status = 'ready' THEN hour END) AS latest_mirrored_hour,
-                MAX(CASE WHEN process_status = 'ready' THEN hour END) AS latest_sharded_hour,
                 MAX(CASE WHEN prebuild_status = 'ready' THEN hour END) AS latest_processed_hour
             FROM archive_hours
             """
         ).fetchone()
-        return dict(row)
+        payload = dict(row)
+        for key in (
+            "prebuild_ready",
+            "prebuild_pending",
+            "prebuild_processing",
+            "prebuild_error",
+        ):
+            payload.pop(key, None)
+        return payload
+
+    def current_processing_filename(self) -> str | None:
+        row = self._conn.execute(
+            """
+            SELECT filename
+            FROM archive_hours
+            WHERE process_status = 'processing' OR prebuild_status = 'processing'
+            ORDER BY hour
+            LIMIT 1
+            """
+        ).fetchone()
+        if row is None:
+            return None
+        filename = row["filename"]
+        return filename if isinstance(filename, str) else None
 
     def log_event(
         self,
@@ -893,7 +997,7 @@ class RelayIndex:
             """
             SELECT created_at, filename, payload_json
             FROM relay_events
-            WHERE event_type = 'filtered_prebuild_progress'
+            WHERE event_type IN ('filtered_prebuild_progress', 'process_progress')
             ORDER BY id DESC
             LIMIT 1
             """

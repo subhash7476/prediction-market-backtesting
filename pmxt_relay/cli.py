@@ -16,7 +16,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="PMXT relay server")
     parser.add_argument(
         "command",
-        choices=("api", "worker", "sync-once", "prebuild-filtered", "stats"),
+        choices=("api", "worker", "sync-once", "stats"),
         help="Relay command to run",
     )
     parser.add_argument(
@@ -77,21 +77,6 @@ def main(argv: list[str] | None = None) -> int:
                     sort_keys=True,
                 )
             )
-        return 0
-
-    if args.command == "prebuild-filtered":
-        worker = RelayWorker(
-            config,
-            reset_inflight=True,
-            reset_mirror_inflight=False,
-            reset_process_inflight=False,
-            reset_prebuild_inflight=True,
-        )
-        if args.limit is not None:
-            count = worker._prebuild_filtered_hours(limit=args.limit)  # noqa: SLF001
-            print(json.dumps({"prebuilt_hours": count}, indent=2, sort_keys=True))
-        else:
-            worker.run_prebuild_forever()
         return 0
 
     if args.command == "stats":

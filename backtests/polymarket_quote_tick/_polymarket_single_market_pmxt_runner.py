@@ -12,12 +12,12 @@ from __future__ import annotations
 from collections.abc import Callable
 from datetime import UTC
 from datetime import datetime
+import os
 from typing import Any
 
 import pandas as pd
 
 from nautilus_trader.adapters.polymarket import POLYMARKET_VENUE
-from nautilus_trader.adapters.polymarket import PolymarketPMXTDataLoader
 from nautilus_trader.adapters.polymarket.fee_model import PolymarketFeeModel
 from nautilus_trader.adapters.prediction_market.backtest_utils import (
     infer_realized_outcome,
@@ -30,8 +30,41 @@ from nautilus_trader.model.enums import BookType
 from nautilus_trader.model.identifiers import InstrumentId
 from nautilus_trader.trading.strategy import Strategy
 
+from backtests._shared.data_sources.pmxt import configured_pmxt_data_source
+from backtests._shared.data_sources.pmxt import (
+    RunnerPolymarketPMXTDataLoader as PolymarketPMXTDataLoader,
+)
+
 
 type StrategyFactory = Callable[[InstrumentId], Strategy]
+
+
+def _apply_window_env_overrides(
+    *,
+    start_time: pd.Timestamp | datetime | str | None,
+    end_time: pd.Timestamp | datetime | str | None,
+    lookback_hours: float | None,
+) -> tuple[
+    pd.Timestamp | datetime | str | None,
+    pd.Timestamp | datetime | str | None,
+    float | None,
+]:
+    override_start = os.getenv("START_TIME", "").strip()
+    override_end = os.getenv("END_TIME", "").strip()
+    override_lookback = os.getenv("LOOKBACK_HOURS", "").strip()
+
+    if override_start:
+        start_time = override_start
+    if override_end:
+        end_time = override_end
+    if override_lookback:
+        try:
+            lookback_hours = float(override_lookback)
+        except ValueError as exc:
+            raise ValueError(
+                f"LOOKBACK_HOURS must be numeric, got {override_lookback!r}"
+            ) from exc
+    return start_time, end_time, lookback_hours
 
 
 async def run_single_market_pmxt_backtest(
@@ -53,6 +86,11 @@ async def run_single_market_pmxt_backtest(
     start_time: pd.Timestamp | datetime | str | None = None,
     end_time: pd.Timestamp | datetime | str | None = None,
 ) -> dict[str, Any] | None:
+    start_time, end_time, lookback_hours = _apply_window_env_overrides(
+        start_time=start_time,
+        end_time=end_time,
+        lookback_hours=lookback_hours,
+    )
     try:
         end = pd.Timestamp(end_time if end_time is not None else datetime.now(UTC))
         if end.tzinfo is None:
@@ -89,11 +127,13 @@ async def run_single_market_pmxt_backtest(
     )
 
     try:
-        loader = await PolymarketPMXTDataLoader.from_market_slug(
-            market_slug,
-            token_index=token_index,
-        )
-        data = loader.load_order_book_and_quotes(start, end)
+        with configured_pmxt_data_source() as data_source:
+            print(data_source.summary)
+            loader = await PolymarketPMXTDataLoader.from_market_slug(
+                market_slug,
+                token_index=token_index,
+            )
+            data = loader.load_order_book_and_quotes(start, end)
     except Exception as exc:
         print(f"Unable to load PMXT Polymarket market {market_slug}: {exc}")
         return

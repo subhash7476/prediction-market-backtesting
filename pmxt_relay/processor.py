@@ -52,6 +52,7 @@ PARQUET_BATCH_SIZE = 65536
 class ProcessedHourResult:
     artifacts: list[FilteredHourArtifact]
     total_filtered_rows: int
+    filtered_group_count: int
 
 
 def materialize_partition_dir(
@@ -154,6 +155,8 @@ class RelayHourProcessor:
         *,
         progress_callback: Callable[[int, int], None] | None = None,
         skip_filtered: bool = False,
+        write_processed: bool = True,
+        batch_sink: Callable[[str, pa.RecordBatch], None] | None = None,
     ) -> ProcessedHourResult:
         hour = parse_archive_hour(filename).isoformat()
         temp_root = self._config.tmp_root / f"{filename}.filtered"
@@ -161,10 +164,12 @@ class RelayHourProcessor:
         partition_root = temp_root / "partitions"
         final_path = self._config.processed_root / processed_relative_path(filename)
         shutil.rmtree(temp_root, ignore_errors=True)
-        temp_root.mkdir(parents=True, exist_ok=True)
+        if write_processed or not skip_filtered:
+            temp_root.mkdir(parents=True, exist_ok=True)
         if not skip_filtered:
             partition_root.mkdir(parents=True, exist_ok=True)
-        final_path.parent.mkdir(parents=True, exist_ok=True)
+        if write_processed:
+            final_path.parent.mkdir(parents=True, exist_ok=True)
 
         parquet_file = pq.ParquetFile(raw_path)
         total_rows = parquet_file.metadata.num_rows
@@ -181,23 +186,26 @@ class RelayHourProcessor:
                 if batch is not None:
                     total_filtered_rows += batch.num_rows
                     counts.update(self._count_batch_groups(batch))
-                    if writer is None:
+                    if batch_sink is not None:
+                        batch_sink(hour, batch)
+                    if write_processed and writer is None:
                         writer = pq.ParquetWriter(
                             temp_path,
                             PROCESSED_SCHEMA,
                             compression="zstd",
                         )
-                    writer.write_batch(
-                        pa.RecordBatch.from_arrays(
-                            [
-                                batch.column("market_id"),
-                                batch.column("token_id"),
-                                batch.column("update_type"),
-                                batch.column("data"),
-                            ],
-                            schema=PROCESSED_SCHEMA,
+                    if write_processed and writer is not None:
+                        writer.write_batch(
+                            pa.RecordBatch.from_arrays(
+                                [
+                                    batch.column("market_id"),
+                                    batch.column("token_id"),
+                                    batch.column("update_type"),
+                                    batch.column("data"),
+                                ],
+                                schema=PROCESSED_SCHEMA,
+                            )
                         )
-                    )
                     if not skip_filtered:
                         self._write_partition_batch(
                             batch,
@@ -214,10 +222,16 @@ class RelayHourProcessor:
                 writer = None
 
             if not wrote_any:
-                final_path.unlink(missing_ok=True)
-                return ProcessedHourResult(artifacts=[], total_filtered_rows=0)
+                if write_processed:
+                    final_path.unlink(missing_ok=True)
+                return ProcessedHourResult(
+                    artifacts=[],
+                    total_filtered_rows=0,
+                    filtered_group_count=0,
+                )
 
-            os.replace(temp_path, final_path)
+            if write_processed:
+                os.replace(temp_path, final_path)
             if skip_filtered:
                 artifacts: list[FilteredHourArtifact] = []
             else:
@@ -229,6 +243,7 @@ class RelayHourProcessor:
             return ProcessedHourResult(
                 artifacts=artifacts,
                 total_filtered_rows=total_filtered_rows,
+                filtered_group_count=len(counts),
             )
         finally:
             if writer is not None:

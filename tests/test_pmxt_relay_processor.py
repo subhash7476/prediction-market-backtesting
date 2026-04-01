@@ -137,6 +137,67 @@ def test_hour_processor_writes_one_processed_shard_per_hour(tmp_path):
     ]
 
 
+def test_hour_processor_can_stream_filtered_batches_without_writing_processed_shard(
+    tmp_path: Path,
+) -> None:
+    config = _make_config(tmp_path)
+    config.ensure_directories()
+    raw_path = (
+        config.raw_root
+        / "2026"
+        / "03"
+        / "21"
+        / "polymarket_orderbook_2026-03-21T15.parquet"
+    )
+    raw_path.parent.mkdir(parents=True, exist_ok=True)
+    pq.write_table(
+        pa.table(
+            {
+                "market_id": [
+                    "condition-a",
+                    "condition-a",
+                    "condition-b",
+                    "condition-b",
+                ],
+                "update_type": [
+                    "book_snapshot",
+                    "price_change",
+                    "price_change",
+                    "trade",
+                ],
+                "data": [
+                    '{"token_id":"token-yes","seq":1}',
+                    '{"token_id":"token-yes","seq":2}',
+                    '{"token_id":"token-no","seq":3}',
+                    '{"token_id":"token-no","seq":4}',
+                ],
+            }
+        ),
+        raw_path,
+    )
+
+    captured_batches: list[pa.RecordBatch] = []
+    processor = RelayHourProcessor(config)
+    result = processor.process_hour(
+        "polymarket_orderbook_2026-03-21T15.parquet",
+        raw_path,
+        skip_filtered=True,
+        write_processed=False,
+        batch_sink=lambda hour, batch: captured_batches.append(batch),
+    )
+
+    assert result.artifacts == []
+    assert result.total_filtered_rows == 3
+    assert result.filtered_group_count == 2
+    assert captured_batches
+    assert sum(batch.num_rows for batch in captured_batches) == 3
+    assert all("relay_row_index" in batch.schema.names for batch in captured_batches)
+    processed_path = config.processed_root / processed_relative_path(
+        "polymarket_orderbook_2026-03-21T15.parquet"
+    )
+    assert not processed_path.exists()
+
+
 def test_materialized_filtered_hour_preserves_original_row_order(tmp_path):
     config = _make_config(tmp_path)
     config.ensure_directories()

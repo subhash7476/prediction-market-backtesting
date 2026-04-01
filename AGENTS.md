@@ -104,14 +104,13 @@ The latter is not automatically a code bug.
 - Relay services:
   - `pmxt-relay-api.service`
   - `pmxt-relay-worker.service`
-  - `pmxt-relay-prebuild.service`
 - Public relay URL: `https://209-209-10-83.sslip.io`
 - Trusted proxy env var: `PMXT_RELAY_TRUSTED_PROXY_IPS`
 
 If relay code changes are deployed, verify both service state and HTTP health:
 
 ```bash
-systemctl is-active pmxt-relay-api.service pmxt-relay-worker.service pmxt-relay-prebuild.service
+systemctl is-active pmxt-relay-api.service pmxt-relay-worker.service
 curl -fsS https://209-209-10-83.sslip.io/healthz
 curl -fsS https://209-209-10-83.sslip.io/v1/stats
 curl -fsS https://209-209-10-83.sslip.io/v1/system
@@ -122,18 +121,25 @@ curl -fsS https://209-209-10-83.sslip.io/v1/system
 If a PR changes live relay behavior in `pmxt_relay/`, do not stop at local
 tests if deploy access is available. Deploy and verify the real box.
 
+When touching the VPS over SSH:
+
+- prefer one persistent PTY SSH session for the whole deploy/observe cycle
+- avoid opening many short-lived SSH sessions in a row; fail2ban is enabled on
+  the box and repeated reconnect churn is avoidable
+- do long-running `systemctl`, `curl`, and observation loops inside that one
+  PTY unless there is a strong reason not to
+
 Typical deploy steps:
 
 ```bash
 rsync updated relay files to /opt/prediction-market-backtesting
 update /etc/pmxt-relay.env if env semantics changed
-systemctl restart pmxt-relay-api.service pmxt-relay-worker.service pmxt-relay-prebuild.service
-systemctl is-active pmxt-relay-api.service pmxt-relay-worker.service pmxt-relay-prebuild.service
+systemctl restart pmxt-relay-api.service pmxt-relay-worker.service
+systemctl is-active pmxt-relay-api.service pmxt-relay-worker.service
 ```
 
 If restart is messy:
 
-- check whether `prebuild` is stuck in shutdown
 - verify the final state again after systemd settles
 - do not assume “restart command returned” means the workers are healthy
 
@@ -162,7 +168,7 @@ One transient timeout immediately after restart is less important than a repeat.
 ## Relay Metrics Note
 
 - `/v1/system` CPU is based on `1-minute loadavg / cpu_count`, capped at `100`.
-- A high CPU percentage can reflect worker/prebuild pressure or I/O wait, not necessarily an API failure.
+- A high CPU percentage can reflect worker or ClickHouse pressure or I/O wait, not necessarily an API failure.
 - Confirm with `uptime`, `/proc/loadavg`, `vmstat`, and top processes before concluding the box is unhealthy.
 
 ## Docs Invariants
