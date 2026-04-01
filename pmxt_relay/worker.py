@@ -202,7 +202,9 @@ class RelayWorker:
 
     def _adopt_local_raw_hours(self) -> int:
         adopted = 0
-        for raw_path in sorted(self._config.raw_root.rglob("polymarket_orderbook_*.parquet")):
+        for raw_path in sorted(
+            self._config.raw_root.rglob("polymarket_orderbook_*.parquet")
+        ):
             if not raw_path.is_file():
                 continue
             filename = raw_path.name
