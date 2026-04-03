@@ -13,6 +13,10 @@ The repository direction is local-first:
 If you only need a shared mirror, keep the relay in raw mirror mode and serve
 `/v1/raw/...` without server-side filtering.
 
+Mirror deployment and archived self-hosted relay guidance live on the separate
+[Mirror And Relay Ops](pmxt-relay.md) page so the vendor docs can stay focused
+on data layout, source order, and local processing.
+
 ### Runner Source Modes
 
 The preferred PMXT quote-tick path is runner-side source selection through
@@ -23,10 +27,14 @@ Example:
 
 ```python
 DATA = MarketDataConfig(
-    platform="polymarket",
-    data_type="quote_tick",
-    vendor=PMXT_VENDOR,
-    sources=("/data/pmxt/raw", "https://mirror.example.com"),
+    platform=Polymarket,
+    data_type=QuoteTick,
+    vendor=PMXT,
+    sources=(
+        "/data/pmxt/raw",
+        "r2.pmxt.dev",
+        "mirror.example.com",
+    ),
 )
 ```
 
@@ -36,6 +44,9 @@ With PMXT, the active public contract is:
 2. local raw mirror
 3. explicit remote PMXT archive
 4. explicit raw mirror or relay fallback
+
+After the cache layer, the runner honors the raw-source order exactly as you
+list it in `DATA.sources`.
 
 The underlying Nautilus PMXT loader still has a filtered-relay tier for people
 running a legacy or self-hosted full-stack relay. In this repository's current
@@ -114,6 +125,8 @@ The important distinction is:
 - the public runner layer does not use relay-hosted filtered parquet
 - filtered relay processing is legacy compatibility in the vendored PMXT loader,
   not the preferred shared deployment model for this repo
+- if you want a team-facing processed-data service, that is now an explicitly
+  self-hosted archive pattern rather than the active public relay path
 
 If you want local-only PMXT replays, set both:
 

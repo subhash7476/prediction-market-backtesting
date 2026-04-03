@@ -32,6 +32,18 @@ if str(_REPO_ROOT) not in sys.path:
 _installed = False
 
 
+def _transfer_label(source: str) -> str:
+    parsed = urlparse(source)
+    path = parsed.path or source
+    filename = Path(path).name
+    hour_label = filename.removeprefix("polymarket_orderbook_").removesuffix(".parquet")
+    if parsed.scheme == "file" or source.startswith("/"):
+        return f"local raw {hour_label}"
+    if "/v1/raw/" in source:
+        return f"relay raw {hour_label}"
+    return f"r2 raw {hour_label}"
+
+
 def install_timing() -> None:
     """Monkey-patch the PMXT loader to show per-hour progress, timing, and source."""
     global _installed
@@ -57,15 +69,6 @@ def install_timing() -> None:
         "stop": threading.Event(),
         "spinner_index": 0,
     }
-
-    def _transfer_label(url: str) -> str:
-        filename = Path(urlparse(url).path).name
-        hour_label = filename.removeprefix("polymarket_orderbook_").removesuffix(
-            ".parquet"
-        )
-        if "/v1/raw/" in url:
-            return f"relay raw {hour_label}"
-        return f"r2 raw {hour_label}"
 
     def _ensure_transfer_state(
         *,
@@ -308,6 +311,7 @@ def install_timing() -> None:
                     total=len(hours),
                     desc="Fetching hours",
                     unit="hr",
+                    leave=False,
                     bar_format=(
                         "{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}]"
                         "{postfix}"
@@ -339,6 +343,7 @@ def install_timing() -> None:
                     downloads.clear()
                     bar = pbar_state["bar"]
                     if bar is not None:
+                        bar.clear(nolock=True)
                         bar.set_postfix_str("", refresh=False)
                         bar.close()
                         pbar_state["bar"] = None

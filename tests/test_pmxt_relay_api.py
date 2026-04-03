@@ -29,7 +29,6 @@ def _make_config(tmp_path: Path) -> RelayConfig:
         data_dir=tmp_path,
         bind_host="127.0.0.1",
         bind_port=8080,
-        public_base_url=None,
         archive_listing_url="https://archive.pmxt.dev/data/Polymarket",
         raw_base_url="https://r2.pmxt.dev",
         poll_interval_secs=900,
@@ -38,7 +37,6 @@ def _make_config(tmp_path: Path) -> RelayConfig:
         archive_max_pages=None,
         event_retention=1000,
         api_rate_limit_per_minute=2400,
-        api_list_max_hours=2000,
     )
 
 

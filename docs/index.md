@@ -9,16 +9,17 @@ This repository is documented around two active operating assumptions:
   `SIMS`, `STRATEGY_CONFIGS`, and a `PredictionMarketBacktest` object with a
   `.run()` entrypoint
 
-PMXT is the first fully documented vendor path. The archived full-stack relay
-implementation lives under `archive/pmxt_relay_legacy/`.
+PMXT is the first fully documented vendor path. Mirror and relay operations are
+filed under the vendor/local-processing docs instead of being treated as a
+top-level product surface.
 
 - [Setup](setup.md)
 - [Backtests And Runners](backtests.md)
 - [Execution Modeling](execution-modeling.md)
 - [Data Vendors, Local Mirrors, And Local Processing](pmxt-byod.md)
+- [Mirror And Relay Ops](pmxt-relay.md)
 - [Vendor Fetch Sources And Timing](pmxt-fetch-sources.md)
 - [Plotting](plotting.md)
 - [Testing](testing.md)
 - [Project Status](project-status.md)
 - [License Notes](license.md)
-- [PMXT Relay Deploy And Ops](https://github.com/evan-kolberg/prediction-market-backtesting/blob/main/pmxt_relay/README.md)

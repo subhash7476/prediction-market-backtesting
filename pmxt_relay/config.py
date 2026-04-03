@@ -29,7 +29,6 @@ class RelayConfig:
     data_dir: Path
     bind_host: str
     bind_port: int
-    public_base_url: str | None
     archive_listing_url: str
     raw_base_url: str
     poll_interval_secs: int
@@ -38,7 +37,6 @@ class RelayConfig:
     archive_max_pages: int | None
     event_retention: int
     api_rate_limit_per_minute: int
-    api_list_max_hours: int
     trusted_proxy_ips: tuple[str, ...] = ("127.0.0.1", "::1")
 
     @classmethod
@@ -48,9 +46,6 @@ class RelayConfig:
             os.getenv("PMXT_RELAY_DATA_DIR", str(default_data_dir))
         ).expanduser()
         archive_max_pages = _env_int("PMXT_RELAY_ARCHIVE_MAX_PAGES", 0)
-        public_base_url = os.getenv("PMXT_RELAY_PUBLIC_BASE_URL")
-        if public_base_url is not None:
-            public_base_url = public_base_url.rstrip("/")
         archive_listing_url = (
             os.getenv("PMXT_RELAY_ARCHIVE_LISTING_URL") or ""
         ).strip()
@@ -63,7 +58,6 @@ class RelayConfig:
             data_dir=data_dir,
             bind_host=os.getenv("PMXT_RELAY_BIND_HOST", "0.0.0.0"),
             bind_port=_env_int("PMXT_RELAY_BIND_PORT", 8080),
-            public_base_url=public_base_url,
             archive_listing_url=archive_listing_url.rstrip("/"),
             raw_base_url=raw_base_url.rstrip("/"),
             poll_interval_secs=max(60, _env_int("PMXT_RELAY_POLL_INTERVAL_SECS", 900)),
@@ -74,10 +68,6 @@ class RelayConfig:
             api_rate_limit_per_minute=max(
                 0,
                 _env_int("PMXT_RELAY_API_RATE_LIMIT_PER_MINUTE", 2400),
-            ),
-            api_list_max_hours=max(
-                1,
-                _env_int("PMXT_RELAY_API_LIST_MAX_HOURS", 2000),
             ),
             trusted_proxy_ips=_env_csv(
                 "PMXT_RELAY_TRUSTED_PROXY_IPS",

@@ -84,8 +84,8 @@ If you front the relay with Caddy, nginx, or another reverse proxy, serve
 proxying large parquet downloads through Python.
 
 Edit `/etc/pmxt-relay.env` before starting the services. The active relay does
-not bake in archive or raw-origin URLs; set your mirror's upstream listing URL,
-raw origin URL, and public base URL explicitly for the environment you run.
+not bake in archive or raw-origin URLs; set your mirror's upstream listing URL
+and raw origin URL explicitly for the environment you run.
 
 ## API Surface
 

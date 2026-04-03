@@ -1,5 +1,5 @@
 """
-PMXT relay server for mirrored raw archive files and precomputed filtered hours.
+PMXT relay package for mirrored raw archive files and mirror-only HTTP endpoints.
 """
 
 from pmxt_relay.config import RelayConfig

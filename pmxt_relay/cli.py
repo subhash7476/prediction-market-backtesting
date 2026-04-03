@@ -28,12 +28,6 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Relay command to run",
     )
     parser.add_argument(
-        "--limit",
-        type=int,
-        default=None,
-        help="Limit the number of hours mirrored by the selected command",
-    )
-    parser.add_argument(
         "--vendor",
         choices=("pmxt",),
         default="pmxt",
@@ -83,22 +77,21 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "sync-once":
-        if args.limit is None:
-            RelayWorker(config).run_once()
-        else:
-            worker = RelayWorker(config)
-            discovered = worker._discover_archive_hours()  # noqa: SLF001
-            mirrored = worker._mirror_pending_hours()  # noqa: SLF001
-            print(
-                json.dumps(
-                    {
-                        "discovered": discovered,
-                        "mirrored": mirrored,
-                    },
-                    indent=2,
-                    sort_keys=True,
-                )
+        worker = RelayWorker(config)
+        adopted = worker._adopt_local_raw_hours()  # noqa: SLF001
+        discovered = worker._discover_archive_hours()  # noqa: SLF001
+        mirrored = worker._mirror_pending_hours()  # noqa: SLF001
+        print(
+            json.dumps(
+                {
+                    "adopted": adopted,
+                    "discovered": discovered,
+                    "mirrored": mirrored,
+                },
+                indent=2,
+                sort_keys=True,
             )
+        )
         return 0
 
     if args.command == "stats":

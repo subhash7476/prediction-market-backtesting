@@ -239,4 +239,4 @@ For vendor-specific data-source behavior and timings, use:
 
 - [Data Vendors, Local Mirrors, And Local Processing](pmxt-byod.md)
 - [Vendor Fetch Sources And Timing](pmxt-fetch-sources.md)
-- [PMXT Relay Deploy And Ops](https://github.com/evan-kolberg/prediction-market-backtesting/blob/main/pmxt_relay/README.md)
+- [Mirror And Relay Ops](pmxt-relay.md)

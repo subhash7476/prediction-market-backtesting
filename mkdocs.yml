@@ -44,12 +44,16 @@ nav:
       - Required JSON Payload Shape: /prediction-market-backtesting/pmxt-byod/#required-json-payload-shape
       - Relay Mode: /prediction-market-backtesting/pmxt-byod/#relay-mode
       - What Is Not Plug-And-Play Yet: /prediction-market-backtesting/pmxt-byod/#what-is-not-plug-and-play-yet
+      - Mirror And Relay Ops: pmxt-relay.md
+      - Active Mirror Service: /prediction-market-backtesting/pmxt-relay/#active-mirror-service
+      - Legacy Self-Hosted Relay: /prediction-market-backtesting/pmxt-relay/#legacy-self-hosted-relay
+      - Storage-Rich Team Deployment: /prediction-market-backtesting/pmxt-relay/#storage-rich-team-deployment
+      - Local-First Alternative: /prediction-market-backtesting/pmxt-relay/#local-first-alternative
   - Vendor Fetch Sources And Timing:
       - Vendor Fetch Sources And Timing: pmxt-fetch-sources.md
       - Example Output: /prediction-market-backtesting/pmxt-fetch-sources/#example-output
       - Timing Expectations By Source: /prediction-market-backtesting/pmxt-fetch-sources/#timing-expectations-by-source
       - How To See This Output: /prediction-market-backtesting/pmxt-fetch-sources/#how-to-see-this-output
-  - PMXT Relay: pmxt-relay.md
   - Plotting:
       - Plotting: plotting.md
       - Output Paths: /prediction-market-backtesting/plotting/#output-paths
@@ -73,3 +77,4 @@ markdown_extensions:
   - tables
   - fenced_code
   - codehilite
+  - toc
