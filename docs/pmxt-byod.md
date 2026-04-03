@@ -41,16 +41,15 @@ DATA = MarketDataConfig(
 With PMXT, the active public contract is:
 
 1. local cache
-2. local raw mirror
-3. explicit remote PMXT archive
-4. explicit raw mirror or relay fallback
+2. each explicit raw source in the order you list it
 
 After the cache layer, the runner honors the raw-source order exactly as you
 list it in `DATA.sources`.
 
-The underlying Nautilus PMXT loader still has a filtered-relay tier for people
-running a legacy or self-hosted full-stack relay. In this repository's current
-mirror-first setup, that filtered tier is not the shared-server path to rely on.
+The vendored Nautilus PMXT loader still exposes legacy compatibility modes for
+people running a self-hosted full-stack relay. In this repository's current
+mirror-first setup, the supported shared-server path is raw parquet serving,
+not relay-hosted filtered parquet.
 
 Legacy `PMXT_DATA_SOURCE` mode flags still work too:
 
@@ -114,10 +113,10 @@ The current "bring your own data" story is therefore:
 - or use `PMXT_DATA_SOURCE=raw-local` with `PMXT_LOCAL_MIRROR_DIR`
 - or run your own raw mirror and point `PMXT_RELAY_BASE_URL` at it
 
-When the runner falls back to a remote raw source (`r2.pmxt.dev` or a relay
-`/v1/raw/...`), it downloads that hour to a temporary local parquet file,
-filters it locally, and deletes the temp artifact afterward. Persistent raw
-disk growth only happens when you intentionally configure a local raw mirror.
+When the runner falls back to a remote raw source, it downloads that hour to a
+temporary local parquet file, filters it locally, and deletes the temp
+artifact afterward. Persistent raw disk growth only happens when you
+intentionally configure a local raw mirror.
 
 The important distinction is:
 
@@ -291,11 +290,9 @@ that field must be present and string-encoded exactly as expected.
 
 ## Relay Mode
 
-The default relay is:
-
-```text
-https://209-209-10-83.sslip.io
-```
+The public runner layer does not assume a repo-wide default relay host. If you
+want a relay fallback, set it explicitly in `DATA.sources` or with the loader
+env var below.
 
 Override it with:
 

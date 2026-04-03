@@ -44,9 +44,10 @@ the raw venue data are:
 
 ### PMXT
 
-- the loader prefers local filtered cache first, then any local raw PMXT
-  mirror, then relay-hosted filtered hours if the configured relay still serves
-  them, then the configured remote raw archive, then relay-hosted raw hours
+- the loader prefers local filtered cache first, then raw sources in the order
+  configured by the runner
+- for the public PMXT runners in this repo, that usually means local raw
+  mirror first, then the configured remote archive, then a raw mirror fallback
 - the current shared relay direction is mirror-only, so the durable shared
   server path is raw parquet serving rather than server-side filtered-hour
   processing
