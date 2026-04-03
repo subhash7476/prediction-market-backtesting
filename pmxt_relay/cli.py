@@ -11,6 +11,7 @@ from pmxt_relay.api import create_app
 from pmxt_relay.config import RelayConfig
 from pmxt_relay.index_db import RelayIndex
 from pmxt_relay.local_processing import process_local_raw_mirror
+from pmxt_relay.raw_mirror_verifier import verify_local_raw_mirror
 from pmxt_relay.worker import RelayWorker
 
 
@@ -20,7 +21,14 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "command",
-        choices=("api", "worker", "sync-once", "stats", "process-local"),
+        choices=(
+            "api",
+            "worker",
+            "sync-once",
+            "stats",
+            "process-local",
+            "verify-raw-mirror",
+        ),
         help="Relay command to run",
     )
     parser.add_argument(
@@ -68,6 +76,22 @@ def _build_parser() -> argparse.ArgumentParser:
         "--end-hour",
         default=None,
         help="Inclusive UTC hour upper bound for process-local",
+    )
+    parser.add_argument(
+        "--skip-upstream-head",
+        action="store_true",
+        help="Skip upstream HEAD checks during verify-raw-mirror",
+    )
+    parser.add_argument(
+        "--skip-parquet-check",
+        action="store_true",
+        help="Skip parquet metadata validation during verify-raw-mirror",
+    )
+    parser.add_argument(
+        "--upstream-head-concurrency",
+        type=int,
+        default=32,
+        help="Concurrent upstream HEAD probes for verify-raw-mirror",
     )
     return parser
 
@@ -147,6 +171,24 @@ def main(argv: list[str] | None = None) -> int:
             limit=args.limit,
             start_hour=args.start_hour,
             end_hour=args.end_hour,
+        )
+        print(json.dumps(summary.as_dict(), indent=2, sort_keys=True))
+        return 0
+
+    if args.command == "verify-raw-mirror":
+        if args.raw_root is None:
+            parser.error("--raw-root is required for verify-raw-mirror")
+        summary = verify_local_raw_mirror(
+            vendor=args.vendor,
+            raw_root=args.raw_root,
+            archive_listing_url=config.archive_listing_url,
+            raw_base_url=config.raw_base_url,
+            timeout_secs=config.http_timeout_secs,
+            stale_pages=config.archive_stale_pages,
+            max_pages=config.archive_max_pages,
+            check_upstream=not args.skip_upstream_head,
+            check_parquet=not args.skip_parquet_check,
+            upstream_head_concurrency=args.upstream_head_concurrency,
         )
         print(json.dumps(summary.as_dict(), indent=2, sort_keys=True))
         return 0
