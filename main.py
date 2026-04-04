@@ -153,8 +153,8 @@ def _shortcut_candidates(backtest: dict[str, Any]) -> list[str]:
 
 def _assign_shortcuts(
     backtests: list[dict[str, Any]],
-) -> dict[str, str]:
-    shortcuts: dict[str, str] = {}
+) -> dict[str, str | None]:
+    shortcuts: dict[str, str | None] = {}
     used: set[str] = set()
 
     for backtest in backtests:
@@ -164,8 +164,8 @@ def _assign_shortcuts(
                 used.add(candidate)
                 shortcuts[key] = candidate
                 break
-        else:  # pragma: no cover - guarded by available fallback alphabet size
-            raise RuntimeError("Not enough unique letter shortcuts for backtest menu")
+        else:
+            shortcuts[key] = None
 
     return shortcuts
 
@@ -268,13 +268,16 @@ def _show_terminal_menu(backtests: list[dict[str, Any]]) -> int:
             backtest.get("description")
             or "No description provided. Preview shows the pinned runner spec."
         )
-        menu_entries.append(f"[{shortcut}] {_menu_label(backtest)}|{relative_key}")
+        if shortcut is None:
+            menu_entries.append(f"{_menu_label(backtest)}|{relative_key}")
+        else:
+            menu_entries.append(f"[{shortcut}] {_menu_label(backtest)}|{relative_key}")
 
     terminal_menu = TerminalMenu(
         menu_entries,
         title=(
             MENU_TITLE,
-            "letters run immediately, enter runs selection, / searches, q exits",
+            "assigned letters run immediately, enter runs selection, / searches, q exits",
             f"{len(backtests)} runnable entries | preview shows the flat runner spec",
         ),
         menu_cursor="> ",

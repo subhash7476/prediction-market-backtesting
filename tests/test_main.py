@@ -121,10 +121,32 @@ def test_assign_shortcuts_prefers_unique_letters_and_avoids_quit_key():
 
     shortcuts = main_module._assign_shortcuts(backtests)
 
-    assert len(set(shortcuts.values())) == len(backtests)
-    assert all(len(value) == 1 and value.isalpha() for value in shortcuts.values())
-    assert "q" not in shortcuts.values()
-    assert "Q" not in shortcuts.values()
+    assigned = [value for value in shortcuts.values() if value is not None]
+
+    assert len(set(assigned)) == len(backtests)
+    assert all(len(value) == 1 and value.isalpha() for value in assigned)
+    assert "q" not in assigned
+    assert "Q" not in assigned
+
+
+def test_assign_shortcuts_leaves_overflow_entries_without_hotkeys():
+    backtests = [
+        {
+            "name": f"demo_runner_{index}",
+            "description": f"Demo {index}",
+            "relative_parts": (f"demo_runner_{index}.py",),
+            "run": object(),
+        }
+        for index in range(len(main_module.SHORTCUT_LETTERS) + 5)
+    ]
+
+    shortcuts = main_module._assign_shortcuts(backtests)
+    assigned = [value for value in shortcuts.values() if value is not None]
+    unassigned = [value for value in shortcuts.values() if value is None]
+
+    assert len(assigned) == len(main_module.SHORTCUT_LETTERS)
+    assert len(set(assigned)) == len(assigned)
+    assert len(unassigned) == 5
 
 
 def test_runner_preview_includes_command_and_spec(tmp_path: Path, monkeypatch):
