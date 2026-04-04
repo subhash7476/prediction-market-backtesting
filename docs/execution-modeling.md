@@ -33,6 +33,8 @@ the raw venue data are:
 ## Passive Orders And Queue Position
 
 - public runners can now opt into Nautilus `queue_position=True`
+- the public PMXT quote-tick runners in this repo now enable that heuristic by
+  default
 - this is still a heuristic, not true venue queue reconstruction
 - Kalshi and Polymarket trade-tick replay can use trade prints to move queue
   ahead estimates on passive limit orders
@@ -47,7 +49,8 @@ the raw venue data are:
 
 - public runners can now attach a static Nautilus latency model through the
   runner config
-- latency is off by default
+- the public PMXT quote-tick runners in this repo now ship with a static
+  latency model enabled by default
 - the current repo-layer surface is a static millisecond model with separate
   base, insert, update, and cancel delays
 - this helps test whether a market-making or quote-chasing strategy only works
