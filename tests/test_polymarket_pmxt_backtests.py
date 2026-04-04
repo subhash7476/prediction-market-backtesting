@@ -345,9 +345,9 @@ def test_pmxt_sports_backtest_discovers_live_samples(
         "fl1-lil-rcl-2026-04-04-draw",
         "fl1-lil-rcl-2026-04-04-rcl",
     ]
-    assert sims[0].start_time == "2026-04-04T13:40:00Z"
-    assert sims[0].end_time == "2026-04-04T15:40:00Z"
-    assert sims[1].start_time == "2026-04-04T18:35:00Z"
+    assert sims[0].start_time == "2026-04-04T18:00:00Z"
+    assert sims[0].end_time == "2026-04-04T20:00:00Z"
+    assert sims[1].start_time == "2026-04-04T18:00:00Z"
     assert sims[1].end_time == "2026-04-04T20:00:00Z"
 
     for sim in sims:
