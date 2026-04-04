@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+
+from backtests._shared._backtest_runtime import build_backtest_run_state
 from backtests._shared import _prediction_market_backtest as backtest_module
 from backtests._shared._execution_config import ExecutionModelConfig
 from backtests._shared._execution_config import StaticLatencyConfig
@@ -55,3 +58,23 @@ def test_prediction_market_backtest_build_engine_forwards_execution(monkeypatch)
     assert latency_model.insert_latency_nanos == 35_000_000
     assert latency_model.update_latency_nanos == 30_000_000
     assert latency_model.cancel_latency_nanos == 27_000_000
+    assert engine.config.risk_engine.bypass is False
+
+
+def test_build_backtest_run_state_marks_forced_stop_with_partial_coverage():
+    data = [
+        SimpleNamespace(ts_init=0),
+        SimpleNamespace(ts_init=10),
+        SimpleNamespace(ts_init=20),
+    ]
+
+    state = build_backtest_run_state(
+        data=data,
+        backtest_end_ns=10,
+        forced_stop=True,
+    )
+
+    assert state["terminated_early"] is True
+    assert state["stop_reason"] == "account_error"
+    assert state["simulated_through"] == "1970-01-01T00:00:00.000000010+00:00"
+    assert state["coverage_ratio"] == 0.5

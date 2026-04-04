@@ -58,6 +58,9 @@ the raw venue data are:
 
 ## Limits
 
+- repo-owned backtests keep cash-account risk checks enabled by default
+- if a run still force-stops before the simulated window ends, the result now
+  reports `terminated_early`, `simulated_through`, and `coverage_ratio`
 - Kalshi public backtests here are trade-tick replay only
 - Polymarket PMXT-backed backtests are full L2 order-book replay
 - taker-heavy strategies that harvest tiny price changes can look much worse

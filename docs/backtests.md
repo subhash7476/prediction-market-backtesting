@@ -28,6 +28,11 @@ Good public examples:
 - fixed-basket multi-market runner:
   [`backtests/polymarket_trade_tick_sports_vwap_reversion.py`](https://github.com/evan-kolberg/prediction-market-backtesting/blob/main/backtests/polymarket_trade_tick_sports_vwap_reversion.py)
 
+Those public runners are intended as readable research demos, not profitability
+claims. If a run stops before the end of its simulated window, the repo-layer
+result payload now marks that explicitly with `terminated_early`,
+`simulated_through`, and `coverage_ratio`.
+
 ## Runner Contract
 
 Public runners should read like flat experiment specs. The canonical shape is:
