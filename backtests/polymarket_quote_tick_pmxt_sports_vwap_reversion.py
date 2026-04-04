@@ -1,10 +1,10 @@
 # Derived from NautilusTrader prediction-market example code.
 # Distributed under the GNU Lesser General Public License Version 3.0 or later.
-# Modified in this repository on 2026-03-29, 2026-03-31, and 2026-04-03.
+# Modified in this repository on 2026-03-29, 2026-03-31, 2026-04-03, and 2026-04-04.
 # See the repository NOTICE file for provenance and licensing scope.
 
 """
-VWAP reversion on a fixed Polymarket sports basket using PMXT quote ticks.
+VWAP reversion on recent Polymarket sports-game markets using PMXT quote ticks.
 """
 
 # ruff: noqa: E402
@@ -30,7 +30,9 @@ from backtests._shared.data_sources import PMXT, Polymarket, QuoteTick
 
 NAME = "polymarket_quote_tick_pmxt_sports_vwap_reversion"
 
-DESCRIPTION = "VWAP reversion on a fixed Polymarket sports basket using PMXT L2 data"
+DESCRIPTION = (
+    "VWAP reversion on recent closed Polymarket sports-game markets using PMXT L2 data"
+)
 
 DATA = MarketDataConfig(
     platform=Polymarket,
@@ -43,41 +45,46 @@ DATA = MarketDataConfig(
     ),
 )
 
+
+def _sample(
+    market_slug: str,
+    *,
+    start_time: str,
+    end_time: str,
+) -> MarketSimConfig:
+    return MarketSimConfig(
+        market_slug=market_slug,
+        token_index=0,
+        start_time=start_time,
+        end_time=end_time,
+    )
+
+
 SIMS = (
-    MarketSimConfig(
-        market_slug="will-ukraine-qualify-for-the-2026-fifa-world-cup",
-        token_index=0,
-        start_time="2026-02-21T16:00:00Z",
-        end_time="2026-02-23T10:00:00Z",
-        outcome="Yes",
+    _sample(
+        "crint-afg-lka-2026-03-13",
+        start_time="2026-03-20T12:30:00Z",
+        end_time="2026-03-20T14:30:00Z",
     ),
-    MarketSimConfig(
-        market_slug="will-man-city-win-the-202526-champions-league",
-        token_index=0,
-        start_time="2026-02-21T16:00:00Z",
-        end_time="2026-02-23T10:00:00Z",
-        outcome="Yes",
+    _sample(
+        "crint-afg-lka-2026-03-17",
+        start_time="2026-03-24T08:30:00Z",
+        end_time="2026-03-24T10:30:00Z",
     ),
-    MarketSimConfig(
-        market_slug="will-chelsea-win-the-202526-champions-league",
-        token_index=0,
-        start_time="2026-02-21T16:00:00Z",
-        end_time="2026-02-23T10:00:00Z",
-        outcome="Yes",
+    _sample(
+        "crint-afg-lka-2026-03-20",
+        start_time="2026-03-26T23:00:00Z",
+        end_time="2026-03-27T01:00:00Z",
     ),
-    MarketSimConfig(
-        market_slug="will-newcastle-win-the-202526-champions-league",
-        token_index=0,
-        start_time="2026-02-21T16:00:00Z",
-        end_time="2026-02-23T10:00:00Z",
-        outcome="Yes",
+    _sample(
+        "criclcl-kon-dar-2026-03-20",
+        start_time="2026-03-27T07:30:00Z",
+        end_time="2026-03-27T09:30:00Z",
     ),
-    MarketSimConfig(
-        market_slug="will-leverkusen-win-the-202526-champions-league",
-        token_index=0,
-        start_time="2026-02-21T16:00:00Z",
-        end_time="2026-02-23T10:00:00Z",
-        outcome="Yes",
+    _sample(
+        "criclcl-mum-roy-2026-03-23",
+        start_time="2026-03-30T02:30:00Z",
+        end_time="2026-03-30T04:30:00Z",
     ),
 )
 
@@ -130,11 +137,13 @@ BACKTEST = PredictionMarketBacktest(
 def run() -> None:
     results = BACKTEST.run()
     if not results:
-        print("No fixed Polymarket PMXT sports sims met the quote-tick requirements.")
+        print(
+            "No recent Polymarket PMXT sports-game sims met the quote-tick requirements."
+        )
         return
 
     if len(results) < len(SIMS):
-        print(f"Completed {len(results)} of {len(SIMS)} fixed sports sims.")
+        print(f"Completed {len(results)} of {len(SIMS)} recent sports-game sims.")
 
     finalize_market_results(name=NAME, results=results, report=REPORT)
 

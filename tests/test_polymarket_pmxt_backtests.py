@@ -183,11 +183,18 @@ def test_pmxt_sports_backtest_uses_fixed_samples(
     assert module.BACKTEST.probability_window == 30
     assert module.DATA.sources == EXPECTED_PMXT_SOURCES
     assert len(module.SIMS) == 5
+    start_times = set()
+    end_times = set()
     for sim in module.SIMS:
         assert sim.market_slug
-        assert sim.start_time == EXPECTED_START_TIME
-        assert sim.end_time == EXPECTED_END_TIME
-        assert sim.outcome == "Yes"
+        assert sim.token_index == 0
+        assert isinstance(sim.start_time, str) and sim.start_time
+        assert isinstance(sim.end_time, str) and sim.end_time
+        start_times.add(sim.start_time)
+        end_times.add(sim.end_time)
+        assert sim.outcome is None
+    assert len(start_times) > 1
+    assert len(end_times) > 1
 
     strategies = build_strategies_from_configs(
         strategy_configs=module.STRATEGY_CONFIGS,
