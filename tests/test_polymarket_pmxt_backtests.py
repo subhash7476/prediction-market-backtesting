@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 import importlib
-from types import SimpleNamespace
-
 import pandas as pd
 import pytest
 
@@ -311,18 +309,29 @@ def test_pmxt_sports_backtest_discovers_live_samples(
     sims = module.discover_recent_market_sims(now=now, limit=3)
 
     finalized_calls: list[dict[str, object]] = []
-    fake_results = [
-        {"slug": spec.market_slug, "quotes": 1000, "fills": 2, "pnl": 1.25}
-        for spec in sims
-    ]
-    backtest_calls: list[tuple[object, ...]] = []
+    runner_calls: list[tuple[str, str, str]] = []
 
-    def _fake_build_backtest(discovered_sims):  # type: ignore[no-untyped-def]
-        backtest_calls.append(tuple(discovered_sims))
-        return SimpleNamespace(run=lambda: fake_results)
+    async def _fake_run_single_market_pmxt_backtest(**kwargs):  # type: ignore[no-untyped-def]
+        runner_calls.append(
+            (
+                kwargs["market_slug"],
+                kwargs["start_time"],
+                kwargs["end_time"],
+            )
+        )
+        return {
+            "slug": kwargs["market_slug"],
+            "quotes": 1000,
+            "fills": 2,
+            "pnl": 1.25,
+        }
 
     monkeypatch.setattr(module, "discover_recent_market_sims", lambda: sims)
-    monkeypatch.setattr(module, "_build_backtest", _fake_build_backtest)
+    monkeypatch.setattr(
+        module,
+        "run_single_market_pmxt_backtest",
+        _fake_run_single_market_pmxt_backtest,
+    )
     monkeypatch.setattr(
         module,
         "finalize_market_results",
@@ -366,11 +375,16 @@ def test_pmxt_sports_backtest_discovers_live_samples(
     assert isinstance(strategy, QuoteTickVWAPReversionStrategy)
     assert isinstance(strategy.config, QuoteTickVWAPReversionConfig)
 
-    assert backtest_calls == [sims]
+    assert runner_calls == [
+        (sim.market_slug, sim.start_time, sim.end_time) for sim in sims
+    ]
     assert len(finalized_calls) == 1
     assert finalized_calls[0]["name"] == module.NAME
     assert finalized_calls[0]["report"] == module.REPORT
-    assert finalized_calls[0]["results"] == fake_results[: module._TARGET_SIM_COUNT]
+    assert finalized_calls[0]["results"] == [
+        {"slug": sim.market_slug, "quotes": 1000, "fills": 2, "pnl": 1.25}
+        for sim in sims[: module._TARGET_SIM_COUNT]
+    ]
 
 
 def test_pmxt_runner_window_env_overrides(monkeypatch: pytest.MonkeyPatch):

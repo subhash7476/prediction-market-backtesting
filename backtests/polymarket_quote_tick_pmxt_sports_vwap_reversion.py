@@ -11,6 +11,8 @@ VWAP reversion on current Polymarket sports-game markets using PMXT quote ticks.
 
 from __future__ import annotations
 
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
 from decimal import Decimal
 import json
 import re
@@ -29,6 +31,9 @@ from backtests._shared._prediction_market_backtest import MarketReportConfig
 from backtests._shared._prediction_market_backtest import MarketSimConfig
 from backtests._shared._prediction_market_backtest import PredictionMarketBacktest
 from backtests._shared._prediction_market_backtest import finalize_market_results
+from backtests._shared._polymarket_quote_tick_pmxt_runner import (
+    run_single_market_pmxt_backtest,
+)
 from backtests._shared._prediction_market_runner import MarketDataConfig
 from backtests._shared._timing_harness import timing_harness
 from backtests._shared.data_sources import PMXT, Polymarket, QuoteTick
@@ -60,13 +65,17 @@ _HTTP_TIMEOUT_SECS = 10
 _EVENT_SLUG_PATTERN = re.compile(r'href="/event/([^"]+)"')
 _DATED_EVENT_SLUG_PATTERN = re.compile(r"-20\d{2}-\d{2}-\d{2}(?:$|-)")
 _TARGET_SIM_COUNT = 5
-_CANDIDATE_LIMIT = 16
-_MAX_DISCOVERY_EVENT_SLUGS = 36
+_CANDIDATE_LIMIT = 24
+_MAX_DISCOVERY_EVENT_SLUGS = 64
 _DISCOVERY_LOOKBACK = pd.Timedelta(hours=24)
 _DISCOVERY_LOOKAHEAD = pd.Timedelta(hours=12)
 _CURRENT_WINDOW = pd.Timedelta(hours=2)
 _BEST_ASK_DEAD_THRESHOLD = 0.002
 _BEST_BID_DEAD_THRESHOLD = 0.998
+_INITIAL_CASH = 100.0
+_PROBABILITY_WINDOW = 30
+_MIN_QUOTES = 500
+_MIN_PRICE_RANGE = 0.005
 
 
 def _sample(
@@ -122,26 +131,12 @@ BACKTEST = PredictionMarketBacktest(
     data=DATA,
     sims=SIMS,
     strategy_configs=STRATEGY_CONFIGS,
-    initial_cash=100.0,
-    probability_window=30,
-    min_quotes=500,
-    min_price_range=0.005,
+    initial_cash=_INITIAL_CASH,
+    probability_window=_PROBABILITY_WINDOW,
+    min_quotes=_MIN_QUOTES,
+    min_price_range=_MIN_PRICE_RANGE,
     execution=EXECUTION,
 )
-
-
-def _build_backtest(sims: tuple[MarketSimConfig, ...]) -> PredictionMarketBacktest:
-    return PredictionMarketBacktest(
-        name=NAME,
-        data=DATA,
-        sims=sims,
-        strategy_configs=STRATEGY_CONFIGS,
-        initial_cash=100.0,
-        probability_window=30,
-        min_quotes=500,
-        min_price_range=0.005,
-        execution=EXECUTION,
-    )
 
 
 def _iso_z(ts: pd.Timestamp) -> str:
@@ -253,53 +248,64 @@ def _market_score(market: dict, *, now: pd.Timestamp) -> tuple[float, float, flo
     return competitiveness, recency_hours, -(volume + liquidity)
 
 
+def _markets_for_candidate_slug(candidate_slug: str) -> tuple[dict, ...]:
+    direct_market = _fetch_market(candidate_slug)
+    if direct_market is not None:
+        market_slugs = [str(direct_market.get("slug") or candidate_slug)]
+    else:
+        event = _fetch_event(candidate_slug)
+        if event is None:
+            return ()
+        market_slugs = [
+            str(market.get("slug") or "").strip() for market in event.get("markets", [])
+        ]
+
+    markets: list[dict] = []
+    for market_slug in market_slugs:
+        if not market_slug:
+            continue
+        market = (
+            direct_market
+            if direct_market and market_slug == direct_market.get("slug")
+            else _fetch_market(market_slug)
+        )
+        if market is not None:
+            markets.append(market)
+    return tuple(markets)
+
+
 def _candidate_market_dicts(*, now: pd.Timestamp) -> tuple[dict, ...]:
     html = _fetch_text(DISCOVERY_PAGE_URL)
     candidate_slugs = _extract_event_slugs(html)
     markets: list[dict] = []
     seen_market_slugs: set[str] = set()
+    max_workers = min(8, len(candidate_slugs)) or 1
 
-    for candidate_slug in candidate_slugs:
-        direct_market = _fetch_market(candidate_slug)
-        market_slugs: list[str]
-        if direct_market is not None:
-            market_slugs = [str(direct_market.get("slug") or candidate_slug)]
-        else:
-            event = _fetch_event(candidate_slug)
-            if event is None:
-                continue
-            market_slugs = [
-                str(market.get("slug") or "").strip()
-                for market in event.get("markets", [])
-            ]
-
-        for market_slug in market_slugs:
-            if not market_slug or market_slug in seen_market_slugs:
-                continue
-            market = (
-                direct_market
-                if direct_market and market_slug == direct_market.get("slug")
-                else _fetch_market(market_slug)
-            )
-            if market is None:
-                continue
-            if str(market.get("sportsMarketType") or "").casefold() != "moneyline":
-                continue
-            game_start = _parse_game_start(market.get("gameStartTime"))
-            if game_start is None:
-                continue
-            if game_start < now - _DISCOVERY_LOOKBACK:
-                continue
-            if game_start > now + _DISCOVERY_LOOKAHEAD:
-                continue
-            best_bid = _safe_float(market.get("bestBid"))
-            best_ask = _safe_float(market.get("bestAsk"))
-            if best_bid is not None and best_bid >= _BEST_BID_DEAD_THRESHOLD:
-                continue
-            if best_ask is not None and best_ask <= _BEST_ASK_DEAD_THRESHOLD:
-                continue
-            seen_market_slugs.add(market_slug)
-            markets.append(market)
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        for fetched_markets in executor.map(
+            _markets_for_candidate_slug, candidate_slugs
+        ):
+            for market in fetched_markets:
+                market_slug = str(market.get("slug") or "").strip()
+                if not market_slug or market_slug in seen_market_slugs:
+                    continue
+                if str(market.get("sportsMarketType") or "").casefold() != "moneyline":
+                    continue
+                game_start = _parse_game_start(market.get("gameStartTime"))
+                if game_start is None:
+                    continue
+                if game_start < now - _DISCOVERY_LOOKBACK:
+                    continue
+                if game_start > now + _DISCOVERY_LOOKAHEAD:
+                    continue
+                best_bid = _safe_float(market.get("bestBid"))
+                best_ask = _safe_float(market.get("bestAsk"))
+                if best_bid is not None and best_bid >= _BEST_BID_DEAD_THRESHOLD:
+                    continue
+                if best_ask is not None and best_ask <= _BEST_ASK_DEAD_THRESHOLD:
+                    continue
+                seen_market_slugs.add(market_slug)
+                markets.append(market)
 
     markets.sort(key=lambda market: _market_score(market, now=now))
     return tuple(markets)
@@ -335,8 +341,42 @@ def discover_recent_market_sims(
     return tuple(sims)
 
 
+async def _run_discovered_market_sims(
+    sims: tuple[MarketSimConfig, ...],
+) -> list[dict[str, object]]:
+    results: list[dict[str, object]] = []
+    for sim in sims:
+        market_slug = sim.market_slug
+        if not market_slug:
+            continue
+        result = await run_single_market_pmxt_backtest(
+            name=NAME,
+            market_slug=market_slug,
+            token_index=sim.token_index,
+            probability_window=_PROBABILITY_WINDOW,
+            strategy_configs=STRATEGY_CONFIGS,
+            min_quotes=_MIN_QUOTES,
+            min_price_range=_MIN_PRICE_RANGE,
+            initial_cash=_INITIAL_CASH,
+            emit_summary=False,
+            emit_html=False,
+            start_time=sim.start_time,
+            end_time=sim.end_time,
+            data_sources=DATA.sources,
+            execution=EXECUTION,
+        )
+        if result is None:
+            continue
+        results.append(result)
+        if len(results) >= _TARGET_SIM_COUNT:
+            break
+
+    return results
+
+
 @timing_harness
 def run() -> None:
+    print(f"Discovering current sports-game markets from {DISCOVERY_PAGE_URL}...")
     sims = discover_recent_market_sims()
     if not sims:
         print(
@@ -344,8 +384,12 @@ def run() -> None:
         )
         return
 
-    backtest = _build_backtest(sims)
-    results = backtest.run()
+    print(
+        "Discovered "
+        f"{len(sims)} candidate sports-game sims; collecting up to "
+        f"{_TARGET_SIM_COUNT} usable PMXT runs."
+    )
+    results = asyncio.run(_run_discovered_market_sims(sims))
     if not results:
         print(
             "No current Polymarket PMXT sports-game sims met the quote-tick requirements."
